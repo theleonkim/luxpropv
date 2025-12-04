@@ -1,0 +1,74 @@
+﻿@page "/clients"
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@using Luxprop.Services
+
+@inject LuxpropContext Db
+@inject SessionService Session
+
+<PageTitle>Clientes</PageTitle>
+
+<h3>Clientes</h3>
+
+@if (clients is null)
+{
+    <p>Cargando…</p>
+}
+else if (clients.Count == 0)
+{
+    <p>No hay clientes para mostrar.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Email</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var c in clients)
+            {
+                <tr>
+                    <td>@c.ClienteId</td>
+                    <td>@(c.Usuario?.Nombre ?? "-") @(c.Usuario?.Apellido ?? "")</td>
+                    <td>@(c.Usuario?.Email ?? "-")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Cliente>? clients;
+    private int? currentUserId;
+    private string? currentRole;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        currentUserId = await Session.GetUserIdAsync();
+        currentRole = await Session.GetUserRoleAsync();
+
+        await LoadClientsAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadClientsAsync()
+    {
+        // Admin ve todo; otros pueden filtrarse si tu modelo lo soporta
+        IQueryable<Cliente> q = Db.Clientes
+            .Include(c => c.Usuario);
+
+        // Si en tu esquema tienes relación con Agente, aquí aplicas el filtro
+        // if (!string.Equals(currentRole, "Admin", StringComparison.OrdinalIgnoreCase) && currentUserId.HasValue)
+        // {
+        //     q = q.Where(c => c.AgenteId == currentUserId.Value);
+        // }
+
+        clients = await q.AsNoTracking().ToListAsync();
+    }
+}

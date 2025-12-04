@@ -1,0 +1,413 @@
+﻿@page "/reminders"
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@inject IReminderService ReminderSvc
+@inject LuxpropContext Db
+@inject NavigationManager Nav
+@inject IEmailService EmailService
+
+
+<h1>Reminders</h1>
+
+<div class="filters">
+    <input type="date" @bind="fromDate" />
+    <input type="date" @bind="toDate" />
+    <select @bind="filterEstado">
+        <option value="">-- Estado --</option>
+        <option>Pendiente</option>
+        <option>Completado</option>
+        <option>Incumplido</option>
+    </select>
+    <button class="btn btn-primary" @onclick="Load">Apply</button>
+    <button class="btn btn-success" @onclick="NewReminder">New</button>
+</div>
+
+@if (items is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <table class="table-reminders">
+        <thead>
+            <tr>
+                <th>Inicio</th>
+                <th>Título</th>
+                <th>Tipo</th>
+                <th>Estado</th>
+                <th>Propiedad</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var r in items)
+            {
+                <tr>
+                    <td>@r.Inicio.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@r.Titulo</td>
+                    <td>@r.Tipo</td>
+                    <td>@r.Estado</td>
+                    <td>
+                        @{
+                            var p = propiedades.FirstOrDefault(x => x.PropiedadId == r.PropiedadId);
+                            if (p != null)
+                            {
+                                <span>@p.MlsId</span>
+                            }
+                        }
+                    </td>
+
+                    <td>
+                        <button class="btn btn-sm btn-outline-success" @onclick='() => SetEstado(r.RecordatorioId, "Completado")'>Done</button>
+                        <button class="btn btn-sm btn-primary" @onclick="() => Edit(r.RecordatorioId)">Editar</button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(r.RecordatorioId)">Delete</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div class="calendar-container mt-4 p-4 rounded shadow-sm">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <button class="btn btn-outline-info btn-sm fw-bold" @onclick="PrevMonth">«</button>
+            <h3 class="text-center m-0 text-info fw-bold">
+                <i class="bi bi-calendar3 me-2"></i>
+                Calendario del mes (@currentMonth.ToString("MMMM yyyy"))
+            </h3>
+            <button class="btn btn-outline-info btn-sm fw-bold" @onclick="NextMonth">»</button>
+        </div>
+
+        @if (monthItems.Any())
+        {
+            @foreach (var group in Days())
+            {
+                <div class="card mb-3 border-0 shadow-sm calendar-card">
+                    <div class="card-header bg-info text-white fw-semibold">
+                        @group.Key.ToString("dddd, dd MMMM")
+                    </div>
+                    <div class="card-body bg-light">
+                        <ul class="list-unstyled mb-0">
+                            @foreach (var item in group)
+                            {
+                                <li class="mb-1">
+                                    <i class="bi bi-check-circle-fill text-info me-1"></i>
+                                    <span class="fw-semibold">@item.Titulo</span>
+                                    <small class="text-muted">(@item.Inicio.ToLocalTime().ToString("HH:mm"))</small>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="alert alert-info text-center mt-3">
+                <i class="bi bi-info-circle"></i> No hay eventos registrados en este mes.
+            </div>
+        }
+    </div>
+
+}
+
+
+
+@code {
+    private List<Recordatorio>? items;
+    private DateTime? fromDate = DateTime.Today.AddDays(-7);
+    private DateTime? toDate = DateTime.Today.AddDays(21);
+    private string? filterEstado;
+    private List<Propiedad> propiedades = new();
+
+
+    // Mes actual para el calendario
+    DateTime currentMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    List<Recordatorio> monthItems = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        propiedades = await Db.Propiedads.ToListAsync();
+
+        await Load();
+        await LoadMonth(); // 👈 NECESARIO para que se vea el calendario
+    }
+
+    private async Task EnviarPrueba()
+    {
+        await EmailService.SendAsync(
+          "javieraj2715@gmail.com",
+          "✅ Prueba de correo desde Luxprop",
+          "<h3>¡Funciona!</h3><p>Tu integración SMTP con Gmail está correcta.</p>");
+    }
+
+    private async Task LoadMonth()
+    {
+        var start = currentMonth;
+        var end = start.AddMonths(1).AddTicks(-1);
+        // si guardás en UTC, mantener ToUniversalTime()
+        monthItems = await ReminderSvc.ListAsync(
+            usuarioId: null,        // 👈 nombre correcto del parámetro
+            from: start.ToUniversalTime(),
+            to: end.ToUniversalTime());
+    }
+
+    private IEnumerable<IGrouping<DateTime, Recordatorio>> Days()
+      => monthItems
+           .OrderBy(r => r.Inicio)
+           .GroupBy(r => r.Inicio.ToLocalTime().Date) // 👈 agrupar por día local
+           .OrderBy(g => g.Key);
+
+    private async Task Load()
+    {
+        items = await ReminderSvc.ListAsync(
+          usuarioId: null,                              // 👈 corregido
+          from: fromDate?.ToUniversalTime(),
+          to: toDate?.ToUniversalTime());
+
+        if (!string.IsNullOrEmpty(filterEstado))
+            items = items!.Where(x => x.Estado == filterEstado).ToList();
+
+        await LoadMonth(); // 👈 si querés que Apply refresque también el calendario
+    }
+
+    private async Task SetEstado(int id, string estado)
+    {
+        await ReminderSvc.SetEstadoAsync(id, estado);
+        await Load();        // refresca tabla
+        await LoadMonth();   // refresca calendario
+        StateHasChanged();
+    }
+    private async Task Delete(int id)
+    {
+        await ReminderSvc.DeleteAsync(id);
+        await Load();        // refresca tabla
+        await LoadMonth();   // refresca calendario
+        StateHasChanged();
+    }
+    private void NewReminder() => Nav.NavigateTo("/reminders/create");
+    private void Edit(int id) => Nav.NavigateTo($"/reminders/edit/{id}");
+
+    // Navegación de meses
+    private async Task PrevMonth()
+    {
+        currentMonth = currentMonth.AddMonths(-1);
+        await LoadMonth();
+        StateHasChanged();
+    }
+
+    private async Task NextMonth()
+    {
+        currentMonth = currentMonth.AddMonths(1);
+        await LoadMonth();
+        StateHasChanged();
+    }
+
+}
+
+<style>
+    /* ============================================================
+       🎨 ESTILO GENERAL – LUXPROP TEAL THEME (#0A4F55)
+       ============================================================ */
+    :root {
+        --luxprop-main: #0A4F55;
+        --luxprop-main-dark: #073C41;
+        --luxprop-light: #f4fafb;
+        --luxprop-gray: #e6ecef;
+        --luxprop-shadow: rgba(0, 0, 0, 0.08);
+    }
+
+    /* ============================================================
+       🔵 FILTROS BONITOS Y MODERNOS
+       ============================================================ */
+    .filters {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+    }
+
+        .filters input[type="date"],
+        .filters select {
+            padding: 0.55rem 0.8rem;
+            border-radius: 8px;
+            border: 1.8px solid var(--luxprop-main);
+            font-size: 0.9rem;
+            background: white;
+            color: var(--luxprop-main);
+            min-width: 170px;
+            transition: all 0.25s ease;
+        }
+
+            .filters input[type="date"]:focus,
+            .filters select:focus {
+                outline: none;
+                border-color: var(--luxprop-main);
+                box-shadow: 0 0 8px rgba(10, 79, 85, 0.35);
+            }
+
+        /* Botones de los filtros */
+        .filters .btn-primary {
+            background-color: var(--luxprop-main);
+            border-color: var(--luxprop-main);
+            color: #ffffff;
+            border-radius: 8px;
+            font-weight: 600;
+            padding: 0.55rem 1rem;
+            transition: 0.2s ease-in-out;
+        }
+
+            .filters .btn-primary:hover {
+                background-color: var(--luxprop-main-dark);
+            }
+
+        .filters .btn-success {
+            background-color: #2e7d32;
+            border-color: #2e7d32;
+            color: white;
+            border-radius: 8px;
+            padding: 0.55rem 1rem;
+            font-weight: 600;
+        }
+
+            .filters .btn-success:hover {
+                background-color: #256628;
+            }
+
+    /* ============================================================
+       🟦 TABLA SÚPER BONITA – ESTILO LUXPROP
+       ============================================================ */
+    .table-reminders {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 3px 10px var(--luxprop-shadow);
+    }
+
+        /* Encabezado */
+        .table-reminders thead {
+            background-color: var(--luxprop-main);
+            color: #ffffff;
+        }
+
+            .table-reminders thead th {
+                padding: 14px 16px;
+                font-size: 0.88rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+        /* Filas */
+        .table-reminders tbody tr {
+            background: white;
+            transition: background 0.25s ease;
+        }
+
+            .table-reminders tbody tr:hover {
+                background-color: #eef6f7;
+            }
+
+        /* Celdas */
+        .table-reminders td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--luxprop-gray);
+            font-size: 0.9rem;
+            color: #333;
+        }
+
+            /* Estado */
+            .table-reminders td:nth-child(4) {
+                font-weight: 600;
+            }
+
+        /* ============================================================
+       🔘 BOTONES DE ACCIÓN
+       ============================================================ */
+        .table-reminders .btn {
+            font-size: 0.78rem;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+
+        /* DONE */
+        .table-reminders .btn-outline-success {
+            color: #2e7d32;
+            border-color: #2e7d32;
+        }
+
+            .table-reminders .btn-outline-success:hover {
+                background-color: #2e7d32;
+                color: white;
+            }
+
+        /* EDIT */
+        .table-reminders .btn-primary {
+            background-color: var(--luxprop-main) !important;
+            border-color: var(--luxprop-main) !important;
+        }
+
+            .table-reminders .btn-primary:hover {
+                background-color: var(--luxprop-main-dark) !important;
+            }
+
+        /* DELETE */
+        .table-reminders .btn-outline-danger {
+            color: #d64545;
+            border-color: #d64545;
+        }
+
+            .table-reminders .btn-outline-danger:hover {
+                background-color: #d64545;
+                color: white;
+            }
+
+    /* ============================================================
+       📅 CALENDARIO BONITO (con tu mismo estilo)
+       ============================================================ */
+    .calendar-container {
+        background-color: #f9fdfd;
+        border-left: 6px solid var(--luxprop-main);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 3px 10px var(--luxprop-shadow);
+    }
+
+    .calendar-card {
+        border-radius: 10px;
+        overflow: hidden;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+
+        .calendar-card:hover {
+            transform: scale(1.01);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.14);
+        }
+
+        /* Header día */
+        .calendar-card .card-header {
+            background-color: var(--luxprop-main) !important;
+            color: white !important;
+            font-weight: 700;
+        }
+
+    /* Título calendario */
+    .calendar-container h3 {
+        color: var(--luxprop-main) !important;
+        font-weight: 800;
+    }
+
+    /* Mensaje sin eventos */
+    .alert-info {
+        background-color: #eaf7f9;
+        border-color: var(--luxprop-main);
+        color: var(--luxprop-main);
+        font-weight: 600;
+    }
+
+</style>
+

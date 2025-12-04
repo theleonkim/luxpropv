@@ -1,0 +1,514 @@
+﻿@page "/documents"
+@using Luxprop.Business.Services
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+@inject IDocumentoService DocumentoService
+@inject Luxprop.Services.SessionService Session
+
+<PageTitle>Documents - Luxprop</PageTitle>
+
+<div class="documents-page">
+    <div class="page-header">
+        <h1>Documents</h1>
+
+        <!-- FILTERS -->
+        <div class="header-actions">
+
+            <!-- Filter by Type -->
+            <select @onchange="OnFilterChanged" class="form-select">
+                <option value="">-- All Types --</option>
+                @foreach (var type in documentTypes)
+                {
+                    <option value="@type">@GetFriendlyTypeName(type)</option>
+                }
+            </select>
+
+            <!-- Filter by Tags -->
+            <select @onchange="OnTagFilterChanged" class="form-select" style="max-width: 180px;">
+                <option value="">-- All Tags --</option>
+                @foreach (var tag in availableTags)
+                {
+                    <option value="@tag">@tag</option>
+                }
+            </select>
+
+            <!-- Filter by Status -->
+            <select @onchange="OnEstadoFilterChanged" class="form-select" style="max-width:150px;">
+                <option value="">-- All Status --</option>
+                @foreach (var estado in estadosDisponibles)
+                {
+                    <option value="@estado">@estado</option>
+                }
+            </select>
+
+        </div>
+
+        <!-- UPLOAD -->
+        <div class="header-actions">
+            <InputFile OnChange="OnFileSelected" />
+
+            <input type="text" class="form-control" placeholder="Add tags (comma separated)"
+                   @bind="tagsInput" style="max-width: 250px;" />
+
+            <input type="date" class="form-control" style="max-width: 200px;"
+                   @bind="fechaVencimientoInput" />
+
+            <button class="btn btn-primary" @onclick="UploadDocument" disabled="@(!canUpload)">
+                Upload Document
+            </button>
+        </div>
+    </div>
+
+    @if (documents == null)
+    {
+        <div class="loading">Loading documents...</div>
+    }
+    else if (!documents.Any())
+    {
+        <div class="no-data">No documents found.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Date Uploaded</th>
+                        <th>Expiration</th>
+                        <th>Case File</th>
+                        <th>Tags</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @foreach (var doc in documents)
+                    {
+                        <tr>
+                            <td>@doc.Nombre</td>
+                            <td>@GetFriendlyTypeName(doc.TipoDocumento)</td>
+
+                            <td>
+                                <select class="form-select form-select-sm"
+                                        @onchange="async (e) => await ChangeStatus(doc.DocumentoId, e.Value.ToString())">
+                                    @foreach (var estado in estadosDisponibles)
+                                    {
+                                        <option value="@estado" selected="@(estado == doc.Estado)">
+                                            @estado
+                                        </option>
+                                    }
+                                </select>
+                            </td>
+
+                            <td>@doc.FechaCarga?.ToString("yyyy-MM-dd")</td>
+                            <td>@(doc.FechaVencimiento?.ToString("yyyy-MM-dd") ?? "—")</td>
+                            <td>@doc.ExpedienteId</td>
+
+                            <td>
+                                @if (!string.IsNullOrEmpty(doc.Etiquetas))
+                                {
+                                    var tags = doc.Etiquetas.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                                    foreach (var tag in tags)
+                                    {
+                                        <span class="badge me-1">@tag.Trim()</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+
+                            <td>
+                                <div class="action-buttons">
+                                    @if (!string.IsNullOrEmpty(doc.UrlArchivo))
+                                    {
+                                        <a href="@doc.UrlArchivo" target="_blank" class="btn btn-sm btn-outline-info">
+                                            <i class="bi bi-download"></i> Download
+                                        </a>
+                                    }
+
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => DeleteDocument(doc.DocumentoId)">
+                                        <i class="bi bi-trash"></i> Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+
+            </table>
+        </div>
+    }
+</div>
+
+
+@code {
+    private List<Documento>? documents;
+    private List<string> documentTypes = new();
+    private IBrowserFile? selectedFile;
+    private bool canUpload = false;
+
+    private string selectedType = "";
+    private string selectedTag = "";
+    private string selectedEstado = ""; 
+
+    private List<string> availableTags = new();
+    private string tagsInput = "";
+    private DateTime? fechaVencimientoInput;
+
+    private List<Documento> baseDocuments = new();
+
+
+    private List<string> estadosDisponibles = new()
+    {
+        "Activo",
+        "En revisión",
+        "Completado",
+        "Archivado"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDocuments();
+        LoadDocumentTypes();
+        LoadTags();
+    }
+
+    private void LoadTags()
+    {
+        var etiquetasList = Db.Documentos
+            .Where(d => d.Etiquetas != null)
+            .Select(d => d.Etiquetas)
+            .ToList();
+
+        availableTags = etiquetasList
+            .SelectMany(e => e.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            .Select(t => t.Trim())
+            .Distinct()
+            .OrderBy(t => t)
+            .ToList();
+    }
+
+    private async Task LoadDocuments()
+    {
+        var role = (await Session.GetUserRoleAsync())?.ToLower() ?? "";
+        var userId = await Session.GetUserIdAsync();
+
+        IQueryable<Documento> query = Db.Documentos
+            .Include(d => d.Expediente)
+                .ThenInclude(e => e.Cliente);
+
+        switch (role)
+        {
+            case "admin":
+                break;
+
+            case "agent":
+                query = query.Where(d =>
+                    d.Expediente != null &&
+                    d.Expediente.AgenteId == userId);
+                break;
+
+            case "seller":
+            case "buyer":
+                query = query.Where(d =>
+                    d.Expediente != null &&
+                    d.Expediente.Cliente != null &&
+                    d.Expediente.Cliente.UsuarioId == userId);
+                break;
+
+            default:
+                query = query.Where(d => false);
+                break;
+        }
+
+        documents = await query.ToListAsync();
+    }
+
+
+
+
+
+
+    private void LoadDocumentTypes()
+    {
+        documentTypes = Db.Documentos
+            .Select(d => d.TipoDocumento)
+            .Distinct()
+            .OrderBy(t => t)
+            .ToList();
+    }
+
+    private void OnFilterChanged(ChangeEventArgs e)
+    {
+        selectedType = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private void OnTagFilterChanged(ChangeEventArgs e)
+    {
+        selectedTag = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private void OnEstadoFilterChanged(ChangeEventArgs e)
+    {
+        selectedEstado = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private async void ApplyFilters()
+    {
+        await LoadDocuments(); // ← vuelve a cargar SOLO documentos permitidos
+
+        var query = documents.AsQueryable(); // ← filtras SOBRE los permitidos
+
+        if (!string.IsNullOrEmpty(selectedType))
+            query = query.Where(d => d.TipoDocumento == selectedType);
+
+        if (!string.IsNullOrEmpty(selectedTag))
+            query = query.Where(d => d.Etiquetas != null && d.Etiquetas.Contains(selectedTag));
+
+        if (!string.IsNullOrEmpty(selectedEstado))
+            query = query.Where(d => d.Estado == selectedEstado);
+
+        documents = query.ToList();
+        StateHasChanged();
+    }
+
+
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        canUpload = selectedFile != null;
+    }
+
+    private async Task UploadDocument()
+    {
+        if (selectedFile == null) return;
+
+        using var stream = selectedFile.OpenReadStream(10 * 1024 * 1024);
+
+        var url = await DocumentoService.UploadFileAsync(
+            stream, selectedFile.Name, selectedFile.ContentType);
+
+        var newDoc = new Documento
+        {
+            Nombre = selectedFile.Name,
+            TipoDocumento = selectedFile.ContentType,
+            Estado = "Activo",
+            FechaCarga = DateOnly.FromDateTime(DateTime.UtcNow),
+            FechaVencimiento = fechaVencimientoInput,
+            UrlArchivo = url,
+            Etiquetas = tagsInput
+        };
+
+        Db.Documentos.Add(newDoc);
+        await Db.SaveChangesAsync();
+
+        selectedFile = null;
+        tagsInput = "";
+        fechaVencimientoInput = null;
+        canUpload = false;
+
+        await LoadDocuments();
+        ApplyFilters();
+
+        LoadTags();
+    }
+
+    private async Task DeleteDocument(int id)
+    {
+        var doc = Db.Documentos.Find(id);
+        int userId = await Session.GetUserIdAsync();
+
+        if (doc != null)
+        {
+            if (!string.IsNullOrEmpty(doc.UrlArchivo))
+                await DocumentoService.DeleteFileAsync(doc.UrlArchivo, doc.ExpedienteId, userId);
+
+            Db.Documentos.Remove(doc);
+            await Db.SaveChangesAsync();
+            await LoadDocuments();
+        }
+    }
+
+    private async Task ChangeStatus(int documentoId, string newStatus)
+    {
+        int userId = await Session.GetUserIdAsync();
+        bool ok = await DocumentoService.UpdateDocumentStatusAsync(documentoId, newStatus, userId);
+
+        if (ok)
+        {
+            var doc = documents.FirstOrDefault(d => d.DocumentoId == documentoId);
+            if (doc != null)
+                doc.Estado = newStatus;
+
+            StateHasChanged();
+        }
+    }
+
+    private string GetFriendlyTypeName(string mimeType)
+    {
+        return mimeType switch
+        {
+            "application/pdf" => "PDF",
+            "application/msword" => "Word (.doc)",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "Word (.docx)",
+            "application/vnd.ms-excel" => "Excel (.xls)",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "Excel (.xlsx)",
+            "image/jpeg" => "Image (.jpg)",
+            "image/png" => "Image (.png)",
+            "text/plain" => "Text (.txt)",
+            "application/zip" => "ZIP",
+            _ => mimeType
+        };
+    }
+}
+
+<style>
+/* ============================
+   PAGE LAYOUT
+   ============================ */
+.documents-page {
+    padding: 2rem;
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+}
+
+.page-header h1 {
+    color: #0d505a;
+    font-weight: 700;
+}
+
+/* ============================
+   FILTERS AREA
+   ============================ */
+.header-actions {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+select.form-select,
+input.form-control {
+    min-width: 150px;
+    border-radius: 6px;
+}
+
+/* ============================
+   TABLE DESIGN
+   ============================ */
+.table-responsive {
+    overflow-x: auto;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.table th,
+.table td {
+    padding: 1rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.table th {
+    background-color: #0d505a;
+    color: white;
+    text-transform: uppercase;
+    font-size: .85rem;
+}
+
+.table tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+/* BADGES */
+.badge {
+    background-color: #0d505a;
+    color: white;
+    padding: 0.35rem 0.6rem;
+    border-radius: 6px;
+    font-size: .75rem;
+}
+
+/* ============================
+   BUTTONS
+   ============================ */
+.btn {
+    padding: 0.375rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background-color: #0d505a;
+    color: white;
+    border-color: #0d505a;
+}
+
+.btn-primary:hover {
+    background-color: #093e47;
+}
+
+.btn-outline-info {
+    color: #0d505a;
+    border-color: #0d505a;
+}
+
+.btn-outline-info:hover {
+    background-color: #0d505a;
+    color: white;
+}
+
+.btn-outline-danger {
+    color: #c82333;
+    border-color: #c82333;
+}
+
+.btn-outline-danger:hover {
+    background-color: #c82333;
+    color: white;
+}
+
+.btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Loading / No Data */
+.loading,
+.no-data {
+    padding: 2rem;
+    text-align: center;
+    font-size: 1.25rem;
+    color: #0d505a;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+</style>

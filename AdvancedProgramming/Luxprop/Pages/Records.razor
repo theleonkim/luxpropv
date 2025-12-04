@@ -1,0 +1,435 @@
+﻿@page "/records"
+@using System
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@using Luxprop.Services
+
+@inject LuxpropContext Db
+@inject SessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>Case Records - Luxprop</PageTitle>
+
+<div class="records-page">
+
+    <h2 class="page-title">
+        @(isAdmin ? "Case Records (Admin)" : "My Case Records")
+    </h2>
+
+    @if (!roleResolved)
+    {
+        <div class="loading">Loading...</div>
+    }
+    else if (!isAdmin && !isAgent)
+    {
+        <div class="alert alert-danger mt-3">You are not authorized to view this report.</div>
+    }
+    else
+    {
+        <!-- FILTROS ADMIN -->
+        @if (isAdmin)
+        {
+            <EditForm Model="@filters" OnValidSubmit="@LoadCases">
+                <DataAnnotationsValidator />
+
+                <div class="filters d-flex flex-wrap gap-2 mb-4">
+
+                    <input class="form-control w-auto" placeholder="Case ID"
+                           type="number" @bind-value="filters.ExpedienteId" />
+
+                    <input class="form-control w-auto" placeholder="Status"
+                           @bind-value="filters.Estado" />
+
+                    <input class="form-control w-auto" placeholder="Search property or client"
+                           @bind-value="filters.Search" />
+
+                    <InputDate TValue="DateOnly ?" class="form-control w-auto"
+                               @bind-Value="filters.From" />
+
+                    <InputDate TValue="DateOnly ?" class="form-control w-auto"
+                               @bind-Value="filters.To" />
+
+                    <button class="btn btn-export">Apply filters</button>
+
+                    <a class="btn btn-export @(selectedCaseId == null ? "disabled" : "")"
+                       href="@GetExportUrl()" target="_blank">
+                        Export PDF
+                    </a>
+                </div>
+            </EditForm>
+        }
+        else if (isAgent)
+        {
+            <div class="d-flex justify-content-between mb-3">
+                <p class="text-muted mb-0">
+                    You are viewing your assigned case records.
+                </p>
+
+                <a class="btn btn-export @(selectedCaseId == null ? "disabled" : "")"
+                   href="@GetExportUrl()" target="_blank">
+                    Export PDF
+                </a>
+            </div>
+        }
+
+        <!-- TABLA -->
+        @if (isLoading)
+        {
+            <div class="loading">Loading records…</div>
+        }
+        else if (rows == null || rows.Count == 0)
+        {
+            <div class="no-data">No case records found.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table">
+
+                    <thead>
+                        <tr>
+                            <th>Select</th>
+                            <th>Case ID</th>
+                            <th>Property</th>
+                            <th>Client</th>
+                            <th>Status</th>
+                            <th>Opened</th>
+                            <th>Closed</th>
+                            <th>Docs</th>
+                            <th>Tasks</th>
+                            <th>Progress</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var r in rows)
+                        {
+                            <tr>
+                                <td>
+                                    <input type="radio"
+                                           name="selectedCase"
+                                           value="@r.Id"
+                                           checked="@(selectedCaseId == r.Id)"
+                                           @onchange="@(() => SelectCase(r.Id))" />
+                                </td>
+
+                                <td>@r.Id</td>
+                                <td>@r.Property</td>
+                                <td>@r.Client</td>
+
+                                <td>
+                                    <span class="badge @GetBadgeClass(r.Status)">
+                                        @r.Status
+                                    </span>
+                                </td>
+
+                                <td>@(r.Opened?.ToString("yyyy-MM-dd"))</td>
+                                <td>@(r.Closed?.ToString("yyyy-MM-dd"))</td>
+
+                                <td>@r.DocumentCount</td>
+                                <td>@($"{r.CompletedTasks}/{r.TotalTasks}")</td>
+                                <td>@($"{r.ProgressPercent:0}%")</td>
+                            </tr>
+                        }
+                    </tbody>
+
+                </table>
+            </div>
+        }
+    }
+</div>
+
+@code {
+
+    private CaseFilters filters = new();
+    private List<CaseRow> rows = new();
+    private bool isLoading;
+
+    private bool roleResolved;
+    private bool isAdmin;
+    private bool isAgent;
+
+    private bool firstPass;
+    private int? selectedCaseId;   // expediente seleccionado
+
+    // --- URL para exportar PDF ---
+    private string GetExportUrl()
+    {
+        if (selectedCaseId == null)
+            return "#";
+
+        // Exportamos SIEMPRE un solo expediente
+        return $"/Reports/CaseRecordsPdf?expedienteId={selectedCaseId.Value}";
+    }
+
+    private void SelectCase(int id)
+    {
+        selectedCaseId = id;
+    }
+    private string GetBadgeClass(string status) => status switch
+    {
+        "Open" => "bg-warning text-dark",
+        "In progress" => "bg-info text-dark",
+        "Closed" => "bg-success",
+        _ => "bg-secondary"
+    };
+
+
+    // Cargamos usuario/rol DESPUÉS del prerender para no disparar JS interop
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || firstPass) return;
+        firstPass = true;
+
+        await Session.LoadUserAsync();
+        var role = NormalizeRole(await Session.GetUserRoleAsync());
+
+        isAdmin = role == "admin";
+        isAgent = role == "agent";
+        roleResolved = true;
+
+        if (!isAdmin && !isAgent)
+        {
+            var target = role switch
+            {
+                "seller" => "/dashboardvend",
+                "buyer" => "/dashboardcomp",
+                _ => "/login"
+            };
+            Nav.NavigateTo(target, true);
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        filters.From = today.AddMonths(-1);
+        filters.To = today;
+
+        await LoadCases();
+        StateHasChanged();
+    }
+
+    private async Task LoadCases()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        // Id del usuario actual (para filtrar por agente)
+        int? currentUserId = null;
+        if (isAgent)
+        {
+            currentUserId = await Session.GetUserIdAsync();
+        }
+
+        var q = Db.Expedientes
+            .Include(e => e.Propiedad)
+            .Include(e => e.Cliente).ThenInclude(c => c.Usuario)
+            .Include(e => e.Documentos)
+            .Include(e => e.TareaTramites)
+            .AsQueryable();
+
+        // --- Restricción por agente: solo ve sus propiedades ---
+        if (isAgent && currentUserId.HasValue)
+        {
+            q = q.Where(e => e.Propiedad != null &&
+                             e.Propiedad.AgenteId == currentUserId.Value);
+        }
+
+        // Filtros solo para admin
+        if (isAdmin)
+        {
+            if (filters.ExpedienteId.HasValue)
+                q = q.Where(e => e.ExpedienteId == filters.ExpedienteId.Value);
+
+            if (!string.IsNullOrWhiteSpace(filters.Estado))
+                q = q.Where(e => e.Estado == filters.Estado);
+
+            if (filters.From.HasValue)
+                q = q.Where(e => e.FechaApertura.HasValue &&
+                                 e.FechaApertura.Value >= filters.From.Value);
+
+            if (filters.To.HasValue)
+                q = q.Where(e => e.FechaApertura.HasValue &&
+                                 e.FechaApertura.Value <= filters.To.Value);
+
+            if (!string.IsNullOrWhiteSpace(filters.Search))
+            {
+                var term = filters.Search.ToLower();
+                q = q.Where(e =>
+                    (e.Propiedad != null && e.Propiedad.Titulo != null &&
+                     e.Propiedad.Titulo.ToLower().Contains(term)) ||
+                    (e.Cliente != null && e.Cliente.Usuario != null &&
+                     (e.Cliente.Usuario.Nombre + " " + e.Cliente.Usuario.Apellido)
+                        .ToLower().Contains(term)));
+            }
+        }
+
+        var list = await q
+            .OrderByDescending(e => e.FechaApertura)
+            .ThenBy(e => e.ExpedienteId)
+            .ToListAsync();
+
+        rows = list.Select(e =>
+        {
+            var totalTasks = e.TareaTramites?.Count ?? 0;
+            var completedTasks = e.TareaTramites?.Count(t =>
+                t.Estado == "Completed" ||
+                t.Estado == "Completado" ||
+                t.Estado == "Finalizado" ||
+                t.Estado == "Cerrado") ?? 0;
+
+            double progress = 0;
+            if (totalTasks > 0)
+                progress = (double)completedTasks / totalTasks * 100.0;
+
+            return new CaseRow
+            {
+                Id = e.ExpedienteId,
+                Property = e.Propiedad?.Titulo ?? "-",
+                Client = e.Cliente?.Usuario != null
+                    ? $"{e.Cliente.Usuario.Nombre} {e.Cliente.Usuario.Apellido}"
+                    : "No client",
+                Status = e.Estado ?? "-",
+                Opened = e.FechaApertura,
+                Closed = e.FechaCierre,
+                DocumentCount = e.Documentos?.Count ?? 0,
+                TotalTasks = totalTasks,
+                CompletedTasks = completedTasks,
+                ProgressPercent = progress
+            };
+        }).ToList();
+
+        // si solo hay uno, lo seleccionamos por defecto
+        if (rows.Count == 1)
+            selectedCaseId = rows[0].Id;
+
+        isLoading = false;
+        StateHasChanged();
+    }
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => string.Empty
+        };
+    }
+
+    private sealed class CaseFilters
+    {
+        public int? ExpedienteId { get; set; }
+        public string? Estado { get; set; }
+        public string? Search { get; set; }
+        public DateOnly? From { get; set; }
+        public DateOnly? To { get; set; }
+    }
+
+    private sealed class CaseRow
+    {
+        public int Id { get; set; }
+        public string Property { get; set; } = string.Empty;
+        public string Client { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public DateOnly? Opened { get; set; }
+        public DateOnly? Closed { get; set; }
+        public int DocumentCount { get; set; }
+        public int TotalTasks { get; set; }
+        public int CompletedTasks { get; set; }
+        public double ProgressPercent { get; set; }
+    }
+}
+
+<style>
+
+    .records-page {
+        padding: 2rem;
+    }
+
+    .page-title {
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-bottom: 1.5rem;
+        color: #0d505a;
+    }
+
+    /* Filters */
+    .filters .form-control {
+        min-width: 180px;
+        border-radius: 6px;
+    }
+
+    .btn-export {
+        background-color: #0d505a;
+        color: white;
+        border-radius: 6px;
+        padding: .45rem 1rem;
+        font-size: .85rem;
+        border: none;
+    }
+
+        .btn-export:hover {
+            background-color: #093e47;
+            color: white;
+        }
+
+    /* Table (same as Expedientes) */
+    .table {
+        width: 100%;
+        background: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+        .table th {
+            background-color: #0d505a;
+            color: white;
+            padding: 1rem;
+            font-size: .85rem;
+            text-transform: uppercase;
+        }
+
+        .table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e2e2;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f1f5f6;
+        }
+
+    /* Badges */
+    .badge {
+        padding: .45rem .7rem;
+        border-radius: 6px;
+        font-size: .75rem;
+        font-weight: 600;
+    }
+
+    .bg-warning {
+        background-color: #ffc107 !important;
+        color: #000 !important;
+    }
+
+    .bg-success {
+        background-color: #28a745 !important;
+    }
+
+    .bg-secondary {
+        background-color: #6c757d !important;
+    }
+
+    .loading,
+    .no-data {
+        text-align: center;
+        padding: 2rem;
+        font-size: 1.2rem;
+        color: #0d505a;
+    }
+
+</style>

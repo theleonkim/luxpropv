@@ -1,0 +1,441 @@
+﻿@page "/users"
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Luxprop.Models
+@using Luxprop.Services
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+@inject SessionService SessionService
+@inject NavigationManager Navigation
+
+<PageTitle>Users - Luxprop</PageTitle>
+
+@if (!isAuthorized)
+{
+    <p>Checking permissions...</p>
+}
+else if (!canAccessUsers)
+{
+    <p class="alert alert-warning mt-3">Access denied. Only administrators and agents can manage users.</p>
+}
+else
+{
+    <div class="users-page">
+        <div class="page-header">
+            <h1>Manage Users</h1>
+
+            @if (isAdmin)
+            {
+                <button class="btn btn-primary" @onclick="@(() => Navigation.NavigateTo("/user/create"))">
+                    + Create User
+                </button>
+            }
+        </div>
+
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var user in users)
+                    {
+                        <tr>
+                            <td>@user.Nombre @user.Apellido</td>
+                            <td>@user.Email</td>
+                            <td>@user.Telefono</td>
+
+                            <td>
+                                <select class="form-select"
+                                        @onchange="(e) => ChangeRole(user.UsuarioID, e.Value?.ToString())">
+
+                                    @foreach (var rol in GetAssignableRolesForUser(user))
+
+                                    {
+                                        <option value="@rol.RolId" selected="@(rol.RolId == user.RolId)">
+                                            @rol.Nombre
+                                        </option>
+                                    }
+                                </select>
+                            </td>
+
+                            <td>
+                                <input type="checkbox" checked="@user.Activo"
+                                       @onchange="(e) => ToggleActive(user.UsuarioID, (bool)e.Value!)" />
+                            </td>
+
+                            <td class="action-buttons">
+                                <button class="btn btn-outline-primary btn-sm" @onclick="() => OpenModal(user)">
+                                    Edit
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (selectedUser != null)
+        {
+            <div class="modal-backdrop fade show"></div>
+            <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.4);">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Edit User</h5>
+                            <button type="button" class="btn-close" @onclick="CloseModal"></button>
+                        </div>
+
+                        <div class="modal-body">
+                            <EditForm Model="@selectedUser" OnSubmit="@SaveUserChanges">
+                                <DataAnnotationsValidator />
+
+                                <div class="form-group mb-3">
+                                    <label>Name</label>
+                                    <InputText @bind-Value="selectedUser.Nombre" class="form-control" />
+                                </div>
+
+                                <div class="form-group mb-3">
+                                    <label>Last Name</label>
+                                    <InputText @bind-Value="selectedUser.Apellido" class="form-control" />
+                                </div>
+
+                                <div class="form-group mb-3">
+                                    <label>Email</label>
+                                    <InputText @bind-Value="selectedUser.Email" class="form-control" disabled />
+                                </div>
+
+                                <div class="form-group mb-3">
+                                    <label>Phone</label>
+                                    <InputText @bind-Value="selectedUser.Telefono" class="form-control" />
+                                </div>
+
+                                <div class="form-group mb-3">
+                                    <label>Role</label>
+                                    <InputSelect @bind-Value="selectedUser.RolId" class="form-control">
+                                        @foreach (var rol in GetAssignableRolesForUser(selectedUser))
+                                        {
+                                            <option value="@rol.RolId">@rol.Nombre</option>
+                                        }
+                                    </InputSelect>
+                                </div>
+
+                                <div class="form-check mb-3">
+                                    <InputCheckbox @bind-Value="selectedUser.Activo" class="form-check-input" id="activoCheck" />
+                                    <label for="activoCheck" class="form-check-label">Active</label>
+                                </div>
+
+                                <button type="submit" class="btn btn-primary w-100">Save Changes</button>
+                            </EditForm>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (successMessage != null)
+        {
+            <div class="alert alert-success mt-3">@successMessage</div>
+        }
+
+        @if (errorMessage != null)
+        {
+            <div class="alert alert-danger mt-3">@errorMessage</div>
+        }
+    </div>
+}
+
+@code {
+    private List<CreateUserVM> users = new();
+    private List<Rol> allRoles = new();
+    private string? successMessage;
+    private string? errorMessage;
+
+    private bool isAdmin = false;
+    private bool isAgent = false;
+    private bool isAuthorized = false;
+    private bool canAccessUsers = false;
+
+    private CreateUserVM? selectedUser;
+    private bool firstPass;
+
+    // ---------------------------------------
+    // LOAD USER PERMISSIONS
+    // ---------------------------------------
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || firstPass) return;
+        firstPass = true;
+
+        await SessionService.LoadUserAsync();
+        var roleRaw = await SessionService.GetUserRoleAsync();
+        var role = NormalizeRole(roleRaw);
+
+        isAdmin = role == "admin";
+        isAgent = role == "agent";
+        isAuthorized = true;
+        canAccessUsers = isAdmin || isAgent;
+
+        if (!canAccessUsers)
+        {
+            Navigation.NavigateTo("/dashboard", forceLoad: true);
+            return;
+        }
+
+        allRoles = await Db.Rols.ToListAsync();
+        await LoadUsers();
+        StateHasChanged();
+    }
+
+    // ---------------------------------------
+    // RETURN ROLES USER CAN ASSIGN
+    // ---------------------------------------
+    private IEnumerable<Rol> GetAssignableRolesForUser(CreateUserVM user)
+    {
+        string userRole = NormalizeRole(allRoles.First(r => r.RolId == user.RolId).Nombre);
+
+        if (isAdmin)
+        {
+            // Admin puede ver y asignar todo
+            return allRoles;
+        }
+
+        if (isAgent)
+        {
+            // --- AGENTE NO PUEDE MODIFICAR ADMIN NI AGENTS ---
+            if (userRole == "admin" || userRole == "agent")
+            {
+                // Se devuelve solo su propio rol, para que no cambie
+                return allRoles.Where(r => NormalizeRole(r.Nombre) == userRole);
+            }
+
+            // --- AGENTE SOLO PUEDE ASIGNAR BUYER / SELLER ---
+            return allRoles.Where(r =>
+                NormalizeRole(r.Nombre) == "buyer" ||
+                NormalizeRole(r.Nombre) == "seller"
+            );
+        }
+
+        return Enumerable.Empty<Rol>();
+    }
+
+    // ---------------------------------------
+    private async Task LoadUsers()
+    {
+        users = await (
+            from u in Db.Usuarios
+            join ur in Db.UsuarioRols on u.UsuarioId equals ur.UsuarioId
+            join r in Db.Rols on ur.RolId equals r.RolId
+            select new CreateUserVM
+            {
+                UsuarioID = u.UsuarioId,
+                Nombre = u.Nombre,
+                Apellido = u.Apellido,
+                Email = u.Email,
+                Telefono = u.Telefono,
+                RolId = r.RolId,
+                Activo = u.Activo ?? false
+            }
+        ).OrderBy(u => u.Nombre).ToListAsync();
+    }
+
+    private void OpenModal(CreateUserVM user)
+    {
+        selectedUser = new CreateUserVM
+        {
+            UsuarioID = user.UsuarioID,
+            Nombre = user.Nombre,
+            Apellido = user.Apellido,
+            Email = user.Email,
+            Telefono = user.Telefono,
+            RolId = user.RolId,
+            Activo = user.Activo
+        };
+    }
+
+    private void CloseModal() => selectedUser = null;
+
+    private async Task SaveUserChanges()
+    {
+        try
+        {
+            if (selectedUser == null) return;
+
+            var dbUser = await Db.Usuarios.FindAsync(selectedUser.UsuarioID);
+            if (dbUser == null) return;
+
+            dbUser.Nombre = selectedUser.Nombre;
+            dbUser.Apellido = selectedUser.Apellido;
+            dbUser.Telefono = selectedUser.Telefono;
+            dbUser.Activo = selectedUser.Activo;
+
+            // Update role
+            var userRol = Db.UsuarioRols.FirstOrDefault(ur => ur.UsuarioId == dbUser.UsuarioId);
+            if (userRol == null)
+                Db.UsuarioRols.Add(new UsuarioRol { UsuarioId = dbUser.UsuarioId, RolId = selectedUser.RolId });
+            else
+                userRol.RolId = selectedUser.RolId;
+
+            await Db.SaveChangesAsync();
+            await LoadUsers();
+
+            successMessage = "User updated successfully.";
+            CloseModal();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private async Task ChangeRole(int userId, string? newRole)
+    {
+        if (!int.TryParse(newRole, out int roleId)) return;
+
+        var userRol = Db.UsuarioRols.FirstOrDefault(ur => ur.UsuarioId == userId);
+        if (userRol != null)
+            userRol.RolId = roleId;
+
+        await Db.SaveChangesAsync();
+    }
+
+    private async Task ToggleActive(int userId, bool isActive)
+    {
+        var u = Db.Usuarios.FirstOrDefault(x => x.UsuarioId == userId);
+        if (u != null)
+        {
+            u.Activo = isActive;
+            await Db.SaveChangesAsync();
+        }
+    }
+
+    private static string NormalizeRole(string? role)
+    {
+        var s = role?.Trim().ToLower();
+        return s switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => ""
+        };
+    }
+}
+<style>
+    .users-page {
+        padding: 2rem;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+    }
+
+        .page-header h1 {
+            margin: 0;
+            color: #0d505a;
+        }
+
+    .table-responsive {
+        overflow-x: auto;
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+        .table th,
+        .table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .table th {
+            background-color: #0d505a;
+            color: white;
+            font-weight: 600;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+
+    .action-buttons {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .btn {
+        padding: 0.375rem 0.75rem;
+        border-radius: 4px;
+        text-decoration: none;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+    }
+
+    .btn-primary {
+        background-color: #0d505a;
+        color: white;
+        border-color: #0d505a;
+    }
+
+        .btn-primary:hover {
+            background-color: #093e47;
+        }
+
+    .btn-outline-primary {
+        color: #0d505a;
+        border-color: #0d505a;
+        background-color: transparent;
+    }
+
+        .btn-outline-primary:hover {
+            background-color: #0d505a;
+            color: white;
+        }
+
+    .btn-sm {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.75rem;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+        z-index: 1040;
+    }
+
+    .modal {
+        z-index: 1050;
+    }
+
+    .modal-content {
+        border-radius: 10px;
+        box-shadow: 0 3px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    .modal-header {
+        border-bottom: 1px solid #dee2e6;
+    }
+
+    .modal-title {
+        color: #0d505a;
+    }
+</style>

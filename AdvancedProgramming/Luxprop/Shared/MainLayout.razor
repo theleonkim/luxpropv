@@ -1,0 +1,319 @@
+﻿@using Luxprop.Business.Services
+@using Luxprop.Services
+@inherits LayoutComponentBase
+@inject SessionService SessionService
+@inject NavigationManager Navigation
+@inject IChatService ChatService
+
+@if (isAuthenticated)
+{
+    <div class="layout-wrapper">
+
+        <!-- TOP BAR -->
+        <header class="top-bar">
+
+            <!-- LEFT BRAND -->
+            <div class="brand-left">
+                <img src="https://i.imgur.com/nmN7x14.png" class="brand-logo" />
+                <span class="brand-title">2CRRE Docs</span>
+            </div>
+
+            <!-- RIGHT SIDE -->
+            <div class="header-right">
+
+                <!-- NOTIFICATION ICON -->
+                <!-- FIXED NOTIFICATION BUTTON -->
+                <div class="notif-container" @onclick="GoToChat">
+                    <i class="bi bi-chat-dots notif-icon"></i>
+
+                    @if (unreadChats > 0)
+                    {
+                        <span class="notif-count">@unreadChats</span>
+                    }
+                </div>
+
+                <!-- USER MENU -->
+                <div class="user-menu">
+                    <div class="user-info" @onclick="ToggleMenu">
+                        <span>@userName (@role)</span>
+                        <i class="bi bi-caret-down-fill"></i>
+                    </div>
+
+                    @if (menuOpen)
+                    {
+                        <div class="user-dropdown">
+                            <a href="/profile">My Profile</a>
+                            <a href="" @onclick="Logout">Logout</a>
+
+                        </div>
+                    }
+                </div>
+
+            </div>
+
+        </header>
+
+        <!-- MAIN MENU -->
+        <nav class="menu-bar">
+            <NavLink href="@dashboardHref" class="menu-link">Dashboard</NavLink>
+            <NavLink href="/documents" class="menu-link">Documents</NavLink>
+            @if (role == "admin" || role == "agent")
+            {
+                <NavLink href="/documentsVencidos" class="menu-link">Expired Documents</NavLink>
+                <NavLink href="/graficos" class="menu-link">Charts</NavLink>
+                <NavLink href="/historial-expedientes" class="menu-link">History</NavLink>
+                <NavLink href="/reminders" class="menu-link">Reminders</NavLink>
+                <NavLink href="/expedientes" class="menu-link"><i class="bi bi-folder2-open"></i> Expedientes</NavLink>
+                <NavLink href="/tramites" class="menu-link">Tasks</NavLink>
+            }
+            
+            
+            <NavLink href="/properties" class="menu-link">Properties</NavLink>
+
+            @if (role == "admin" || role == "agent")
+            {
+                <NavLink href="/chatadmin" class="menu-link"><i class="bi bi-headset"></i> Chat Panel</NavLink>
+            }
+            else
+            {
+                <NavLink href="/chat" class="menu-link"><i class="bi bi-chat-dots"></i> Chat</NavLink>
+            }
+
+            @if (role == "admin" || role == "agent")
+            {
+                <NavLink href="/users" class="menu-link">Manage Users</NavLink>
+            }
+        </nav>
+
+        <main class="page-content">
+            @Body
+        </main>
+
+    </div>
+}
+else
+{
+    @Body
+}
+
+@code {
+
+    private bool isAuthenticated;
+    private string? userName;
+    private string? roleRaw;
+    private string role = "";
+    private string dashboardHref = "/dashboard";
+    private bool menuOpen = false;
+
+    private int unreadChats = 0;
+    private Timer? chatTimer;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // 1) Cargar datos de sesión
+        await SessionService.LoadUserAsync();
+
+        userName = await SessionService.GetUserNameAsync();
+        roleRaw = await SessionService.GetUserRoleAsync();
+        role = NormalizeRole(roleRaw);
+
+        isAuthenticated = SessionService.IsAuthenticated
+                          && !string.IsNullOrWhiteSpace(userName);
+
+        // 2) Definir dashboard según rol
+        dashboardHref = role switch
+        {
+            "admin" => "/dashboard",
+            "agent" => "/dashboardagent",
+            "seller" => "/dashboardvend",
+            "buyer" => "/dashboardcomp",
+            _ => "/dashboard"
+        };
+
+        // 3) Si NO está autenticado, solo permitir rutas públicas
+        if (!isAuthenticated)
+        {
+            var uri = Navigation.Uri.ToLowerInvariant();
+            var isPublic = uri.EndsWith("/login") || uri.EndsWith("/user/create") || uri.EndsWith("/forgot-password"); ;
+
+            if (!isPublic)
+            {
+                Navigation.NavigateTo("/login");
+            }
+
+            // Si no está autenticado, asegurarse de que no se esté contando chat
+            chatTimer?.Dispose();
+            chatTimer = null;
+        }
+        else
+        {
+            // 4) Si SÍ está autenticado, arrancar el polling de chat si aún no está
+            if (chatTimer == null)
+            {
+                StartChatPolling();
+            }
+        }
+    }
+
+    private void GoToChat()
+    {
+        if (role == "admin" || role == "agent")
+            Navigation.NavigateTo("/chatadmin");
+        else
+            Navigation.NavigateTo("/chat");
+    }
+
+    private void StartChatPolling()
+    {
+        chatTimer = new Timer(async _ =>
+        {
+            try
+            {
+                unreadChats = await ChatService.GetUnreadCountAsync(role, userName ?? "");
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error en StartChatPolling: {ex}");
+            }
+        },
+        null,
+        TimeSpan.Zero,
+        TimeSpan.FromSeconds(5));
+    }
+
+
+    private void ToggleMenu()
+    {
+        menuOpen = !menuOpen;
+    }
+
+    private async Task Logout()
+    {
+        // 1) Limpiar sesión
+        await SessionService.LogoutAsync();
+
+        // 2) Actualizar estado local
+        isAuthenticated = false;
+        userName = null;
+        role = "";
+        menuOpen = false;
+
+        // 3) Detener timer de chat
+        chatTimer?.Dispose();
+        chatTimer = null;
+
+        // 4) Navegar al login
+        Navigation.NavigateTo("/login", forceLoad: true);
+
+        // 5) Forzar re-render inmediato por si sigue en la misma página
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => "user"
+        };
+    }
+}
+
+
+<style>
+
+    .header-right {
+        display: flex;
+        align-items: center;
+        gap: 25px;
+    }
+
+    /* Contenedor redondo */
+    .notif-container {
+        width: 38px;
+        height: 38px;
+        background: #ffffff;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        position: relative;
+        margin-right: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+
+    .notif-icon {
+        font-size: 20px;
+        color: #0d505a !important;
+        font-weight: bold;
+    }
+
+    /* Burbujita de número */
+    .notif-count {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        background: #dc3545;
+        color: white;
+        padding: 2px 7px;
+        border-radius: 50%;
+        font-size: 12px;
+        font-weight: bold;
+        min-width: 18px;
+        text-align: center;
+    }
+
+
+    /* USER MENU */
+    .user-menu {
+        position: relative;
+    }
+
+    .user-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background-color: #0d505a;
+        color: white;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: 0.2s;
+    }
+
+        .user-info:hover {
+            background-color: #093e47;
+        }
+
+    .user-dropdown {
+        position: absolute;
+        right: 0;
+        margin-top: 8px;
+        background: white;
+        border-radius: 10px;
+        width: 180px;
+        padding: 8px 0;
+        box-shadow: 0px 4px 18px rgba(0,0,0,0.15);
+        z-index: 1000;
+    }
+
+        .user-dropdown a {
+            display: block;
+            padding: 10px 15px;
+            text-decoration: none;
+            color: #0d505a;
+            font-weight: 600;
+        }
+
+            .user-dropdown a:hover {
+                background-color: #f2f2f2;
+            }
+
+</style>

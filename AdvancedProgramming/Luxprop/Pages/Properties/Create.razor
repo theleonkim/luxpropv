@@ -1,0 +1,341 @@
+@page "/properties/create"
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Luxprop.Services
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+@inject NavigationManager Navigation
+@inject SessionService SessionService
+
+
+<PageTitle>Create Property - Luxprop</PageTitle>
+
+<div class="create-property-page">
+    <div class="page-header">
+        <h1>Create New Property</h1>
+        <a href="/properties" class="btn btn-secondary">Back to Properties</a>
+    </div>
+
+    <div class="form-container">
+        <EditForm Model="@property" OnValidSubmit="@HandleSubmit" FormName="CreatePropertyForm">
+            <DataAnnotationsValidator />
+            
+            <div class="form-group">
+                <label for="titulo">Title</label>
+                <InputText id="titulo" @bind-Value="property.Titulo" class="form-control" />
+                <ValidationMessage For="@(() => property.Titulo)" />
+            </div>
+
+            <div class="form-group">
+                <label for="descripcion">Description</label>
+                <InputTextArea id="descripcion" @bind-Value="property.Descripcion" class="form-control" rows="4" />
+                <ValidationMessage For="@(() => property.Descripcion)" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Property Type</label>
+                <select class="form-select" @bind="property.Tipo_Propiedad">
+                    <option value="">Select type...</option>
+                    <option>Beachfront</option>
+                    <option>Hotels</option>
+                    <option>Homes</option>
+                    <option>Condos</option>
+                    <option>Golf</option>
+                    <option>Mountain</option>
+                    <option>City Homes</option>
+                    <option>Beach Homes</option>
+                    <option>Apartments</option>
+                    <option>Penthouses</option>
+                    <option>Farms</option>
+                    <option>Business</option>
+                </select>
+            </div>
+
+
+            <div class="form-group">
+                <label for="precio">Price</label>
+                <InputNumber id="precio" @bind-Value="property.Precio" class="form-control" />
+                <ValidationMessage For="@(() => property.Precio)" />
+            </div>
+
+            <div class="form-group">
+                <label for="areaConstruccion">Construction Area (m²)</label>
+                <InputNumber id="areaConstruccion" @bind-Value="property.AreaConstruccion" class="form-control" />
+                <ValidationMessage For="@(() => property.AreaConstruccion)" />
+            </div>
+
+            <div class="form-group">
+                <label for="areaTerreno">Land Area (m²)</label>
+                <InputNumber id="areaTerreno" @bind-Value="property.AreaTerreno" class="form-control" />
+                <ValidationMessage For="@(() => property.AreaTerreno)" />
+            </div>
+
+            <div class="form-group">
+                <label for="estadoPublicacion">Publication Status</label>
+                <InputSelect id="estadoPublicacion" @bind-Value="property.EstadoPublicacion" class="form-control">
+                    <option value="">Select Status</option>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                    <option value="Pending">Pending</option>
+                </InputSelect>
+                <ValidationMessage For="@(() => property.EstadoPublicacion)" />
+            </div>
+
+            @if (role == "admin")
+            {
+                <div class="mb-3">
+                    <label class="form-label">Agente asignado</label>
+                    <select @bind="property.AgenteId" class="form-select">
+                        <option value="">-- Seleccione un agente --</option>
+                        @foreach (var a in agentes)
+                        {
+                            <option value="@a.UsuarioId">@a.Nombre @a.Apellido</option>
+                        }
+                    </select>
+                    <ValidationMessage For="@(() => property.AgenteId)" />
+                </div>
+            }
+            else if (role == "agent")
+            {
+                <p class="text-muted">
+                    Esta propiedad será asignada automáticamente al agente:
+                    <strong>@SessionService.CurrentUserName</strong>
+                </p>
+            }
+
+
+            <div class="form-group">
+                <label for="ubicacionId">Location</label>
+                <InputSelect id="ubicacionId" @bind-Value="property.UbicacionId" class="form-control">
+                    <option value="">Select Location</option>
+                    @foreach (var location in locations)
+                    {
+                        <option value="@location.UbicacionId">@location.Provincia</option>
+                    }
+                </InputSelect>
+                <ValidationMessage For="@(() => property.UbicacionId)" />
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                    @if (isLoading)
+                    {
+                        <span>Creating...</span>
+                    }
+                    else
+                    {
+                        <span>Create Property</span>
+                    }
+                </button>
+                <a href="/properties" class="btn btn-secondary">Cancel</a>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="error-message">@errorMessage</div>
+            }
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private string role = "";
+
+    private Propiedad property = new();
+    private List<Usuario> agents = new();
+    private List<Ubicacion> locations = new();
+    private bool isLoading = false;
+    private string errorMessage = string.Empty;
+    private List<Usuario> agentes = new();
+    private Propiedad model = new();
+
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Asignar a la variable global
+        role = NormalizeRole(await SessionService.GetUserRoleAsync());
+
+        // ADMIN → cargar agentes
+        if (role == "admin")
+        {
+            agentes = await Db.Usuarios
+                .Where(u => u.UsuarioRols
+                    .Any(ur => ur.Rol.Nombre.ToLower() == "agente"
+                            || ur.Rol.Nombre.ToLower() == "agent"))
+                .ToListAsync();
+        }
+
+        // AGENTE → asignarse automáticamente
+        if (role == "agent")
+        {
+            property.AgenteId = await SessionService.GetUserIdAsync();
+        }
+
+        await LoadData();
+    }
+
+
+
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            _ => string.Empty
+        };
+    }
+
+
+    private async Task LoadData()
+    {
+        try
+        {
+            agents = Db.Usuarios.ToList();
+            locations = Db.Ubicacions.ToList();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error loading data.";
+            Console.WriteLine($"Error loading data: {ex.Message}");
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        isLoading = true;
+        errorMessage = string.Empty;
+
+        try
+        {
+            property.MlsId = GenerateMlsId();
+            Db.Propiedads.Add(property);
+            await Db.SaveChangesAsync();
+            Navigation.NavigateTo("/properties");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "An error occurred while creating the property.";
+            Console.WriteLine($"Error creating property: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+    private string GenerateMlsId()
+    {
+        return DateTime.Now.ToString("yyyyMMddHHmmss");
+    }
+}
+
+<style>
+    .create-property-page {
+        padding: 2rem;
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+    }
+
+    .page-header h1 {
+        margin: 0;
+        color: #0d505a;
+    }
+
+    .form-container {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+        color: #333;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 1rem;
+        transition: border-color 0.2s;
+    }
+
+    .form-control:focus {
+        outline: none;
+        border-color: #0d505a;
+        box-shadow: 0 0 0 2px rgba(13, 80, 90, 0.2);
+    }
+
+    .form-actions {
+        display: flex;
+        gap: 1rem;
+        margin-top: 2rem;
+        padding-top: 2rem;
+        border-top: 1px solid #eee;
+    }
+
+    .btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        text-decoration: none;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-size: 1rem;
+        transition: all 0.2s;
+        display: inline-block;
+    }
+
+    .btn-primary {
+        background-color: #0d505a;
+        color: white;
+        border-color: #0d505a;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+        background-color: #093e47;
+        border-color: #093e47;
+    }
+
+    .btn-primary:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+        border-color: #6c757d;
+    }
+
+    .btn-secondary:hover {
+        background-color: #545b62;
+        border-color: #545b62;
+    }
+
+    .error-message {
+        color: #dc3545;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 0.75rem;
+        border-radius: 4px;
+        margin-top: 1rem;
+    }
+</style>

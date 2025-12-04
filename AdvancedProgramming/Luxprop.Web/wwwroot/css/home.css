@@ -1,0 +1,15 @@
+﻿@media (max-width: 768px) {
+	.hero-content h1 {
+		font-size: 2.5rem;
+	}
+
+	.hero-actions,
+	.cta-actions {
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.features-grid {
+		grid-template-columns: 1fr;
+	}
+}

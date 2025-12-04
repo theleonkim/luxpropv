@@ -1,0 +1,391 @@
+﻿@page "/historial-expedientes"
+@using ClosedXML.Excel
+@using Luxprop.Data.Models
+@using Luxprop.Services
+@using Microsoft.EntityFrameworkCore
+@using QuestPDF.Fluent
+@using QuestPDF.Helpers
+@inject LuxpropContext Db
+@inject IJSRuntime JS
+@inject Luxprop.Services.SessionService Session
+
+<PageTitle>Case File History</PageTitle>
+
+<div class="history-page">
+    <div class="page-header">
+        <h1>Case File History</h1>
+
+        <div class="header-actions">
+
+            <!-- USER FILTER -->
+            <select @onchange="OnUserFilterChanged" class="form-select">
+                <option value="">-- All Users --</option>
+                @foreach (var u in users)
+                {
+                    <option value="@u.UsuarioId">@u.Nombre @u.Apellido</option>
+                }
+            </select>
+
+            <!-- CASE FILTER -->
+            <select @onchange="OnCaseFilterChanged" class="form-select">
+                <option value="">-- All Case Files --</option>
+                @foreach (var id in caseIds)
+                {
+                    <option value="@id">Case #@id</option>
+                }
+            </select>
+
+        </div>
+    </div>
+
+    @if (filteredHistory == null)
+    {
+        <div class="loading">Loading history...</div>
+    }
+    else if (!filteredHistory.Any())
+    {
+        <div class="no-data">No records found with the selected filters.</div>
+    }
+    else
+    {
+        <div class="export-actions mb-3 d-flex gap-2">
+
+            <button class="btn btn-outline-danger"
+                    @onclick="() => ExportToPdf(filteredHistory)">
+                <i class="bi bi-filetype-pdf"></i> Export PDF
+            </button>
+
+            <button class="btn btn-outline-success"
+                    @onclick="() => ExportToExcel(filteredHistory)">
+                <i class="bi bi-file-earmark-excel"></i> Export Excel
+            </button>
+
+        </div>
+
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Case File</th>
+                        <th>User</th>
+                        <th>Date</th>
+                        <th>Description</th>
+                        <th>New Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var h in filteredHistory)
+                    {
+                        <tr>
+                            <td>@h.HistorialId</td>
+
+                            <td>
+                                <a href="/expedientes/details/@h.ExpedienteId">
+                                    #@h.ExpedienteId
+                                </a>
+                            </td>
+
+                            <td>@h.Usuario?.Nombre @h.Usuario?.Apellido</td>
+
+                            <td>@(h.FechaModificacion?.ToString("yyyy-MM-dd HH:mm"))</td>
+
+                            <td>@h.Descripcion</td>
+
+                            <td>
+                                <span class="badge @(GetStatusBadge(h.EstadoNuevo))">
+                                    @h.EstadoNuevo
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<HistorialExpediente>? history;
+    private List<HistorialExpediente>? filteredHistory;
+
+    private List<Usuario> users = new();
+    private List<int> caseIds = new();
+
+    private int? filterUserId = null;
+    private int? filterCaseId = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        int userId = await Session.GetUserIdAsync();
+
+        await Session.LoadUserAsync();
+        var roleRaw = await Session.GetUserRoleAsync();
+        var role = NormalizeRole(roleRaw);
+
+        var query = Db.HistorialExpedientes
+            .Include(h => h.Usuario)
+            .OrderByDescending(h => h.FechaModificacion)
+            .AsQueryable();
+
+        if (role == "agent")
+            query = query.Where(h => h.UsuarioId == userId);
+
+        history = await query.ToListAsync();
+        filteredHistory = history;
+
+        users = await Db.Usuarios
+            .Where(u => history.Select(h => h.UsuarioId).Contains(u.UsuarioId))
+            .ToListAsync();
+
+        caseIds = history
+            .Select(h => h.ExpedienteId)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+    }
+
+    private void OnUserFilterChanged(ChangeEventArgs e)
+    {
+        filterUserId = string.IsNullOrEmpty(e.Value?.ToString())
+            ? null
+            : int.Parse(e.Value.ToString());
+
+        ApplyFilters();
+    }
+
+    private void OnCaseFilterChanged(ChangeEventArgs e)
+    {
+        filterCaseId = string.IsNullOrEmpty(e.Value?.ToString())
+            ? null
+            : int.Parse(e.Value.ToString());
+
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        filteredHistory = history;
+
+        if (filterUserId != null)
+            filteredHistory = filteredHistory!
+                .Where(h => h.UsuarioId == filterUserId)
+                .ToList();
+
+        if (filterCaseId != null)
+            filteredHistory = filteredHistory!
+                .Where(h => h.ExpedienteId == filterCaseId)
+                .ToList();
+
+        StateHasChanged();
+    }
+
+    // BADGE COLORS
+    private string GetStatusBadge(string status) => status switch
+    {
+        "Abierto" => "bg-info text-dark",
+        "En Proceso" => "bg-warning text-dark",
+        "Cerrado" => "bg-success",
+        _ => "bg-secondary"
+    };
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => string.Empty
+        };
+    }
+
+    /* EXPORT EXCEL */
+    public async Task ExportToExcel(List<HistorialExpediente> history)
+    {
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("History");
+
+        ws.Cell(1, 1).Value = "History ID";
+        ws.Cell(1, 2).Value = "Case ID";
+        ws.Cell(1, 3).Value = "User";
+        ws.Cell(1, 4).Value = "Date";
+        ws.Cell(1, 5).Value = "Status";
+        ws.Cell(1, 6).Value = "Description";
+
+        int row = 2;
+
+        foreach (var h in history)
+        {
+            ws.Cell(row, 1).Value = h.HistorialId;
+            ws.Cell(row, 2).Value = h.ExpedienteId;
+            ws.Cell(row, 3).Value = $"{h.Usuario?.Nombre} {h.Usuario?.Apellido}";
+            ws.Cell(row, 4).Value = h.FechaModificacion?.ToString("yyyy-MM-dd HH:mm");
+            ws.Cell(row, 5).Value = h.EstadoNuevo;
+            ws.Cell(row, 6).Value = h.Descripcion;
+            row++;
+        }
+
+        using var stream = new MemoryStream();
+        wb.SaveAs(stream);
+        var base64 = Convert.ToBase64String(stream.ToArray());
+
+        await JS.InvokeVoidAsync("downloadFile",
+            $"History_{DateTime.Now:yyyyMMdd}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            base64);
+    }
+
+    /* EXPORT PDF */
+    public async Task ExportToPdf(List<HistorialExpediente> history)
+    {
+        var items = history ?? new();
+
+        var pdfBytes = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(20);
+                page.DefaultTextStyle(x => x.FontSize(11));
+
+                page.Header()
+                    .AlignCenter()
+                    .Text("Case File History")
+                    .FontSize(16)
+                    .SemiBold();
+
+                page.Content().PaddingVertical(10).Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.ConstantColumn(70);
+                        columns.ConstantColumn(80);
+                        columns.ConstantColumn(120);
+                        columns.ConstantColumn(120);
+                        columns.ConstantColumn(90);
+                        columns.RelativeColumn();
+                    });
+
+                    table.Header(header =>
+                    {
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("History ID").Bold());
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("Case ID").Bold());
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("User").Bold());
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("Date").Bold());
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("Status").Bold());
+                        header.Cell().Element(c => c.Padding(6).Background("#eeeeee").Text("Description").Bold());
+                    });
+
+                    foreach (var h in items)
+                    {
+                        table.Cell().Element(c => c.Padding(6).Text(h.HistorialId));
+                        table.Cell().Element(c => c.Padding(6).Text(h.ExpedienteId));
+                        table.Cell().Element(c => c.Padding(6).Text($"{h.Usuario?.Nombre} {h.Usuario?.Apellido}"));
+                        table.Cell().Element(c => c.Padding(6).Text(h.FechaModificacion?.ToString("yyyy-MM-dd HH:mm")));
+                        table.Cell().Element(c => c.Padding(6).Text(h.EstadoNuevo ?? "-"));
+                        table.Cell().Element(c => c.Padding(6).Text(h.Descripcion ?? ""));
+                    }
+                });
+            });
+        }).GeneratePdf();
+
+        var base64 = Convert.ToBase64String(pdfBytes);
+
+        await JS.InvokeVoidAsync("downloadFile",
+            $"History_{DateTime.Now:yyyyMMdd}.pdf",
+            "application/pdf",
+            base64);
+    }
+}
+<style>
+    .history-page {
+        padding: 2rem;
+    }
+
+    /* HEADER */
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+        .page-header h1 {
+            margin: 0;
+            color: #0d505a;
+            font-weight: 700;
+        }
+
+    .header-actions {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    /* TABLE */
+    .table {
+        width: 100%;
+        background: #ffffff;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+    }
+
+        .table th {
+            background-color: #0d505a;
+            color: #fff;
+            padding: 1rem;
+            font-size: .85rem;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+        }
+
+        .table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e5e5e5;
+            vertical-align: middle;
+            font-size: .9rem;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f1f5f6;
+            transition: 0.2s ease-in-out;
+        }
+
+    /* BADGES */
+    .badge {
+        padding: .45rem .75rem;
+        border-radius: 6px;
+        font-size: .8rem;
+        font-weight: 600;
+    }
+
+    /* EMPTY / LOADING */
+    .loading,
+    .no-data {
+        text-align: center;
+        padding: 2rem;
+        font-size: 1.2rem;
+        font-weight: 500;
+        color: #0d505a;
+    }
+
+    /* EXPORT BUTTONS */
+    .export-actions .btn {
+        font-size: .9rem;
+        padding: .55rem .9rem;
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: .4rem;
+    }
+
+        .export-actions .btn i {
+            font-size: 1rem;
+        }
+</style>

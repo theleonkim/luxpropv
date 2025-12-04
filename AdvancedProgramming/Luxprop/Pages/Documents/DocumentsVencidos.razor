@@ -1,0 +1,240 @@
+﻿@page "/documentsVencidos"
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+
+<PageTitle>Expired Documents</PageTitle>
+
+<div class="documents-page">
+    <div class="page-header">
+        <h1>Expired Documents</h1>
+    </div>
+
+    @if (expiredDocuments.Any())
+    {
+        <div class="alert-summary">
+            <h5>Total expired: @expiredDocuments.Count</h5>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-info">There are no expired documents.</div>
+    }
+
+    @if (!expiredDocuments.Any())
+    {
+        <div class="no-data">No documents found.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Date Uploaded</th>
+                        <th>Expiration Date</th>
+                        <th>Case File</th>
+                        <th>Tags</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @foreach (var doc in expiredDocuments)
+                    {
+                        <tr class="expired-row">
+                            <td>@doc.Nombre</td>
+
+                            <td>@GetFriendlyTypeName(doc.TipoDocumento)</td>
+
+                            <td>
+                                <select class="form-select form-select-sm"
+                                        @onchange="async (e) => await ChangeStatus(doc.DocumentoId, e.Value.ToString())">
+                                    @foreach (var status in statusList)
+                                    {
+                                        <option value="@status" selected="@(status == doc.Estado)">
+                                            @status
+                                        </option>
+                                    }
+                                </select>
+                            </td>
+
+                            <td>@(doc.FechaCarga?.ToString("yyyy-MM-dd"))</td>
+                            <td>@(doc.FechaVencimiento?.ToString("yyyy-MM-dd"))</td>
+                            <td>@doc.ExpedienteId</td>
+
+                            <td>
+                                @if (!string.IsNullOrEmpty(doc.Etiquetas))
+                                {
+                                    var tags = doc.Etiquetas.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                                    foreach (var tag in tags)
+                                    {
+                                        <span class="badge">@tag.Trim()</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+
+                            <td>
+                                <button class="btn btn-sm btn-outline-danger"
+                                        @onclick="() => DeleteDocument(doc.DocumentoId)">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Documento> expiredDocuments = new();
+
+    private List<string> statusList = new()
+    {
+        "Active",
+        "In Review",
+        "Completed",
+        "Archived",
+        "Expired"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDocuments();
+    }
+
+    private async Task LoadDocuments()
+    {
+        var today = DateTime.Today;
+
+        expiredDocuments = await Db.Documentos
+            .Where(d => d.FechaVencimiento != null && d.FechaVencimiento < today)
+            .OrderBy(d => d.FechaVencimiento)
+            .ToListAsync();
+    }
+
+    private async Task DeleteDocument(int id)
+    {
+        var doc = await Db.Documentos.FindAsync(id);
+
+        if (doc != null)
+        {
+            Db.Documentos.Remove(doc);
+            await Db.SaveChangesAsync();
+            await LoadDocuments();
+        }
+    }
+
+    private async Task ChangeStatus(int documentoId, string newStatus)
+    {
+        var doc = await Db.Documentos.FindAsync(documentoId);
+
+        if (doc != null)
+        {
+            doc.Estado = newStatus;
+            await Db.SaveChangesAsync();
+            await LoadDocuments();
+        }
+    }
+
+    private string GetFriendlyTypeName(string mimeType)
+    {
+        return mimeType switch
+        {
+            "application/pdf" => "PDF",
+            "application/msword" => "Word (.doc)",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "Word (.docx)",
+            "application/vnd.ms-excel" => "Excel (.xls)",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "Excel (.xlsx)",
+            "image/jpeg" => "Image (.jpg)",
+            "image/png" => "Image (.png)",
+            "text/plain" => "Text (.txt)",
+            "application/zip" => "ZIP",
+            _ => mimeType
+        };
+    }
+}
+<style>
+
+    .documents-page {
+        padding: 2rem;
+    }
+
+    .page-header h1 {
+        color: #0d505a;
+        font-weight: 700;
+        margin-bottom: 1.5rem;
+    }
+
+    .alert-summary {
+        background: #e8f5f7;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #cde5e9;
+        margin-bottom: 1.5rem;
+        color: #0d505a;
+    }
+
+    .table {
+        width: 100%;
+        background: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+        .table th {
+            background-color: #0d505a;
+            color: white;
+            font-size: .85rem;
+            text-transform: uppercase;
+            padding: 1rem;
+        }
+
+        .table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e2e2;
+            vertical-align: middle;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f1f5f6;
+        }
+
+    .badge {
+        background-color: #0d505a;
+        color: white;
+        padding: .35rem .6rem;
+        border-radius: 6px;
+        font-size: .75rem;
+    }
+
+    .expired-row {
+        background-color: #ffe5e5 !important;
+        color: #7a1b1b !important;
+        font-weight: 500;
+    }
+
+    .btn-outline-danger:hover {
+        background-color: #c82333;
+        color: white;
+    }
+
+    .no-data,
+    .loading {
+        padding: 2rem;
+        font-size: 1.2rem;
+        color: #0d505a;
+        text-align: center;
+    }
+
+</style>

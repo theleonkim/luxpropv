@@ -1,0 +1,243 @@
+@page "/properties"
+
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@using Luxprop.Business.Services
+@inject IPropiedadService PropiedadService
+@inject IExpedienteService ExpedienteService
+@inject IUtilsService UtilsService
+@inject NavigationManager Navigation
+@inject Luxprop.Services.SessionService Session
+
+<PageTitle>Properties - Luxprop</PageTitle>
+
+<div class="properties-page">
+    <div class="page-header">
+        <h1>Properties</h1>
+        @if (role == "admin" || role == "agent")
+        {
+            <a href="/properties/create" class="btn btn-primary">Create Property</a>
+        }
+    </div>
+
+    @if (properties == null)
+    {
+        <div class="loading">Loading properties...</div>
+    }
+    else if (!properties.Any())
+    {
+        <div class="no-data">No properties found.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>MLS ID</th>
+                        <th>Agent</th>
+                        <th>Title</th>
+                        <th>Description</th>
+                        <th>Type</th>
+                        <th>Price</th>
+                        <th>Construction Area</th>
+                        <th>Land Area</th>
+                        <th>Status</th>
+                        <th>Location</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @foreach (var property in properties)
+                    {
+                        <tr>
+                            <td>@property.MlsId</td>
+
+                            <td>
+                                @if (property.Agente != null)
+                                {
+                                    @($"{property.Agente.Nombre} {property.Agente.Apellido}")
+                                }
+                                else
+                                {
+                                    <span class="text-muted">Not assigned</span>
+                                }
+                            </td>
+
+                            <td>@property.Titulo</td>
+                            <td>@property.Descripcion</td>
+                            <td>@property.Tipo_Propiedad</td>
+                            <td>@property.Precio?.ToString("C")</td>
+                            <td>@property.AreaConstruccion m²</td>
+                            <td>@property.AreaTerreno m²</td>
+                            <td>@property.EstadoPublicacion</td>
+                            <td>@property.Ubicacion?.Provincia</td>
+
+                            <td>
+                                <div class="action-buttons">
+
+                                    <!-- Details -->
+                                    <a href="/properties/details/@property.PropiedadId"
+                                       class="btn btn-sm btn-outline-info">
+                                        <i class="bi bi-eye"></i> Details
+                                    </a>
+
+                                    <!-- Edit (solo admin o agent) -->
+                                    @if (role == "admin" || role == "agent")
+                                    {
+                                        <a href="/properties/edit/@property.PropiedadId"
+                                           class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-pencil"></i> Edit
+                                        </a>
+                                    }
+
+                                    <!-- Mostrar expediente si existe, si no permitir crear -->
+                                    @if (property.Expedientes != null && property.Expedientes.Any())
+                                    {
+                                        var expedienteId = property.Expedientes.First().ExpedienteId;
+                                        @if (role == "admin" || role == "agent")
+                                        {
+                                            <a href="/expedientes/details/@expedienteId"
+                                               class="btn btn-sm btn-outline-success">
+                                                <i class="bi bi-folder2-open"></i> View Case
+                                            </a>
+                                        }
+                                        
+                                    }
+                                    else if (role == "admin" || role == "agent")
+                                    {
+                                        <a href="/expedientes/create/@property.PropiedadId"
+                                           class="btn btn-sm btn-outline-secondary">
+                                            <i class="bi bi-folder-plus"></i> Create Case
+                                        </a>
+                                    }
+
+                                    <!-- Delete -->
+                                    @if (role == "admin" || role == "agent")
+                                    {
+                                        <button class="btn btn-sm btn-outline-danger"
+                                                @onclick="() => DeleteProperty(property.PropiedadId)">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </button>
+                                    }
+
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Propiedad>? properties;
+    private IEnumerable<Expediente>? expedientesCliente;
+    private string role = "";
+    private Cliente? cliente = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            int userId = await Session.GetUserIdAsync();
+            var roleRaw = await Session.GetUserRoleAsync();
+            role = await UtilsService.NormalizeRole(roleRaw);
+
+            properties = await PropiedadService.GetAllAsync();
+
+            if (role == "agent")
+            {
+                properties = properties
+                    .Where(p => p.AgenteId == userId)
+                    .ToList();
+            }
+
+            if (role == "buyer")
+            {
+                cliente = await ExpedienteService.GetClientByIdAsync(userId);
+
+                expedientesCliente = await ExpedienteService.GetAllAsync();
+
+                expedientesCliente = expedientesCliente
+                    .Where(ec => ec.ClienteId == cliente.ClienteId)
+                    .ToList();
+
+                var propiedadesIds = expedientesCliente
+                    .Select(ec => ec.PropiedadId)
+                    .ToList();
+
+                properties = properties
+                    .Where(p => propiedadesIds.Contains(p.PropiedadId))
+                    .ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading properties: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteProperty(int id)
+    {
+        try
+        {
+            var deleted = await PropiedadService.DeleteAsync(id);
+            if (deleted)
+                await OnInitializedAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting property: {ex.Message}");
+        }
+    }
+}
+
+<style>
+    .properties-page {
+        padding: 2rem;
+    }
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        flex-wrap: wrap;
+    }
+    .table {
+        width: 100%;
+        background: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+    .table th {
+        background-color: #0d505a;
+        color: white;
+        padding: 1rem;
+        font-size: .85rem;
+        text-transform: uppercase;
+    }
+    .table td {
+        padding: 1rem;
+        border-bottom: 1px solid #e2e2e2;
+        vertical-align: middle;
+    }
+    .table tbody tr:hover {
+        background-color: #f1f5f6;
+    }
+    .action-buttons {
+        display: flex;
+        gap: .4rem;
+    }
+    .loading,
+    .no-data {
+        padding: 2rem;
+        text-align: center;
+        font-size: 1.1rem;
+        color: #0d505a;
+    }
+</style>

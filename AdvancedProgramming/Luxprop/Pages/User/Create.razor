@@ -1,0 +1,467 @@
+﻿@page "/user/create"
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Luxprop.Models
+@using Luxprop.Services
+@inject LuxpropContext Db
+@inject PasswordHelper PasswordHelper
+@inject AuditoriaService AuditoriaService
+@inject NavigationManager Navigation
+@inject SessionService SessionService
+
+<PageTitle>Create User - Luxprop</PageTitle>
+
+<div class="create-user-page">
+    <div class="page-header">
+        <h1>Create New User</h1>
+
+        @if (isAuthenticated)
+        {
+            <button type="button" class="btn btn-secondary" @onclick="GoBack">Back to Dashboard</button>
+        }
+        else
+        {
+            <button type="button" class="btn btn-secondary" @onclick="GoBack">Back to Login</button>
+        }
+    </div>
+
+    <div class="form-container">
+        <EditForm Model="@userModel" OnValidSubmit="@HandleSubmit" FormName="CreateUserForm">
+            <DataAnnotationsValidator />
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="nombre">First Name</label>
+                    <InputText id="nombre" @bind-Value="userModel.Nombre" class="form-control" />
+                    <ValidationMessage For="@(() => userModel.Nombre)" />
+                </div>
+
+                <div class="form-group">
+                    <label for="apellido">Last Name</label>
+                    <InputText id="apellido" @bind-Value="userModel.Apellido" class="form-control" />
+                    <ValidationMessage For="@(() => userModel.Apellido)" />
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email</label>
+                <InputText id="email" @bind-Value="userModel.Email" class="form-control" />
+                <ValidationMessage For="@(() => userModel.Email)" />
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <InputText id="password" type="password" @bind-Value="userModel.Password" class="form-control" />
+                <ValidationMessage For="@(() => userModel.Password)" />
+            </div>
+
+            <div class="form-group">
+                <label for="telefono">Phone</label>
+                <InputText id="telefono" @bind-Value="userModel.Telefono" class="form-control" />
+                <ValidationMessage For="@(() => userModel.Telefono)" />
+            </div>
+
+            <div class="form-group">
+                <label for="rolId">Role</label>
+
+                <InputSelect id="rolId" @bind-Value="userModel.RolId" class="form-control">
+                    <option value="">Select Role</option>
+                    @foreach (var role in allowedRoles)
+                    {
+                        <option value="@role.RolId">@role.Nombre</option>
+                    }
+                </InputSelect>
+
+                <ValidationMessage For="@(() => userModel.RolId)" />
+            </div>
+
+
+
+            <div class="form-group">
+                <div class="form-check">
+                    <InputCheckbox id="activo" @bind-Value="userModel.Activo" class="form-check-input" />
+                    <label for="activo" class="form-check-label">Active</label>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                    @if (isLoading)
+                    {
+                        <span>Creating User...</span>
+                    }
+                    else
+                    {
+                        <span>Create User</span>
+                    }
+                </button>
+                <button type="button" class="btn btn-secondary" @onclick="GoBack">Cancel</button>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="error-message">@errorMessage</div>
+            }
+
+            @if (!string.IsNullOrEmpty(successMessage))
+            {
+                <div class="success-message">@successMessage</div>
+            }
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private CreateUserVM userModel = new();
+    private List<Rol> roles = new();
+    private List<Rol> allowedRoles = new();   // <- lista que verás en el select
+    private int? adminRoleId;                 // <- id del rol admin si existe
+    private bool isLoading = false;
+    private string errorMessage = string.Empty;
+    private string successMessage = string.Empty;
+    private bool isAuthenticated = false;
+    private bool isAdmin = false;
+
+    private static bool IsAdminName(string? name)
+        => !string.IsNullOrWhiteSpace(name) &&
+           (name.Trim().Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+            name.Trim().Equals("administrador", StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        await LoadRoles(); // carga todos los roles desde BD
+
+        try
+        {
+            // Sesión desde JS (seguro aquí)
+            var userName = await SessionService.GetUserNameAsync();
+            var userRole = (await SessionService.GetUserRoleAsync())?.Trim().ToLowerInvariant();
+
+            isAuthenticated = !string.IsNullOrEmpty(userName);
+            isAdmin = IsAdminName(userRole);
+
+            // Identificar el rol Admin (por nombre)
+            adminRoleId = roles.FirstOrDefault(r => IsAdminName(r.Nombre))?.RolId;
+
+
+            // Admin → puede ver todos
+            if (userRole == "admin")
+            {
+                allowedRoles = roles.OrderBy(r => r.Nombre).ToList();
+            }
+            // Agent → solo puede crear Buyer y Seller
+            else if (userRole == "agent")
+            {
+                allowedRoles = roles
+                    .Where(r => r.Nombre == "buyer" || r.Nombre == "seller")
+                    .OrderBy(r => r.Nombre)
+                    .ToList();
+            }
+
+            StateHasChanged();
+        }
+        catch
+        {
+            isAuthenticated = false;
+            isAdmin = false;
+            allowedRoles = roles.Where(r => !IsAdminName(r.Nombre)).OrderBy(r => r.Nombre).ToList();
+            StateHasChanged();
+        }
+    }
+
+
+    private async Task LoadRoles()
+    {
+        try
+        {
+            roles = Db.Rols.ToList();
+
+            // If empty, seed in English
+            if (roles.Count == 0)
+            {
+                Db.Rols.AddRange(
+                    new Rol { Nombre = "admin" },
+                    new Rol { Nombre = "Agent" },
+                    new Rol { Nombre = "Seller" },
+                    new Rol { Nombre = "Buyer" }
+                );
+                await Db.SaveChangesAsync();
+                roles = Db.Rols.ToList();
+            }
+
+            // If you previously had Spanish names, normalize them to English once:
+            bool changed = false;
+            foreach (var r in roles)
+            {
+                var n = r.Nombre.Trim().ToLowerInvariant();
+                string? en = n switch
+                {
+                    "administrador" => "admin",
+                    "agente" => "agent",
+                    "vendedor" => "seller",
+                    "comprador" => "buyer",
+                    _ => null
+                };
+                if (en != null && en != r.Nombre)
+                {
+                    r.Nombre = en; changed = true;
+                }
+            }
+            if (changed) { await Db.SaveChangesAsync(); roles = Db.Rols.ToList(); }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Error loading roles.";
+            Console.WriteLine($"Error loading roles: {ex.Message}");
+            roles = new List<Rol>();
+        }
+    }
+
+
+
+    private async Task HandleSubmit()
+    {
+        isLoading = true;
+        errorMessage = string.Empty;
+        successMessage = string.Empty;
+
+        try
+        {
+            // Validaciones básicas
+            if (string.IsNullOrWhiteSpace(userModel.Email) ||
+                string.IsNullOrWhiteSpace(userModel.Password) ||
+                string.IsNullOrWhiteSpace(userModel.Nombre) ||
+                string.IsNullOrWhiteSpace(userModel.Apellido) ||
+                userModel.RolId == 0)
+            {
+                errorMessage = "Please complete all required fields.";
+                return;
+            }
+
+            // Email único
+            var exists = Db.Usuarios.Any(u => u.Email == userModel.Email);
+            if (exists)
+            {
+                errorMessage = "This email is already in use.";
+                return;
+            }
+
+            // Crear Usuario
+            var usuario = new Usuario
+            {
+                Nombre = userModel.Nombre,
+                Apellido = userModel.Apellido,
+                Email = userModel.Email,
+                Password = PasswordHelper.HashPassword(userModel.Password),
+                Telefono = userModel.Telefono,
+                Activo = userModel.Activo
+            };
+
+            Db.Usuarios.Add(usuario);
+            await Db.SaveChangesAsync();
+
+            // Asignar rol
+            Db.UsuarioRols.Add(new UsuarioRol
+            {
+                UsuarioId = usuario.UsuarioId,
+                RolId = userModel.RolId
+            });
+
+            await Db.SaveChangesAsync();
+
+            // 🔥 SI EL ROL ES BUYER → CREAR CLIENTE AUTOMÁTICAMENTE
+            var buyerRoleId = Db.Rols.FirstOrDefault(r => r.Nombre.ToLower() == "buyer")?.RolId;
+
+            if (userModel.RolId == buyerRoleId)
+            {
+                var cliente = new Cliente
+                {
+                    UsuarioId = usuario.UsuarioId,
+                    Cedula = "Pendiente",  // Puedes adaptar esto
+					TipoCliente = "Buyer"
+
+                };
+
+                Db.Clientes.Add(cliente);
+                await Db.SaveChangesAsync();
+            }
+
+            // Registrar auditoría
+            var rol = Db.Rols.Find(userModel.RolId);
+            AuditoriaService.RegistrarAuditoria(
+                usuario.UsuarioId,
+                "Crear",
+                "Usuario",
+                $"Usuario creado {usuario.Nombre} {usuario.Apellido} con el rol {rol?.Nombre}"
+            );
+
+            successMessage = "User created successfully.";
+            userModel = new CreateUserVM();
+            StateHasChanged();
+
+            await Task.Delay(2500);
+
+            Navigation.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "An error occurred while creating the user.";
+            Console.WriteLine($"Error creating user: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+
+
+    private void GoBack()
+    {
+        if (isAuthenticated)
+            Navigation.NavigateTo("/dashboard", forceLoad: true);
+        else
+            Navigation.NavigateTo("/login", forceLoad: true);
+    }
+}
+
+<style>
+    .create-user-page {
+        padding: 2rem;
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+    }
+
+        .page-header h1 {
+            margin: 0;
+            color: #0d505a;
+        }
+
+    .form-container {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+
+    .form-control {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 1rem;
+        transition: border-color 0.2s;
+    }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #0d505a;
+            box-shadow: 0 0 0 2px rgba(13, 80, 90, 0.2);
+        }
+
+    .form-check {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .form-check-input {
+        margin: 0;
+    }
+
+    .form-check-label {
+        margin: 0;
+        font-weight: normal;
+    }
+
+    .form-actions {
+        display: flex;
+        gap: 1rem;
+        margin-top: 2rem;
+        padding-top: 2rem;
+        border-top: 1px solid #eee;
+    }
+
+    .btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        text-decoration: none;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-size: 1rem;
+        transition: all 0.2s;
+        display: inline-block;
+    }
+
+    .btn-primary {
+        background-color: #0d505a;
+        color: white;
+        border-color: #0d505a;
+    }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: #093e47;
+            border-color: #093e47;
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+        border-color: #6c757d;
+    }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+            border-color: #545b62;
+        }
+
+    .error-message {
+        color: #dc3545;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 0.75rem;
+        border-radius: 4px;
+        margin-top: 1rem;
+    }
+
+    .success-message {
+        color: #155724;
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
+        padding: 0.75rem;
+        border-radius: 4px;
+        margin-top: 1rem;
+    }
+</style>

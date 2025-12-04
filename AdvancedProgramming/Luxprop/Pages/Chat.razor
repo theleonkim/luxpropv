@@ -1,0 +1,386 @@
+@page "/chat"
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@inject LuxpropContext Db
+@inject Luxprop.Services.SessionService Session
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+
+<PageTitle>Marty LiveChat</PageTitle>
+
+<div class="chat-container">
+    @if (!isChatActive)
+    {
+        <div class="init-form">
+            <h3>Ready to chat?</h3>
+            <button class="btn-start" @onclick="StartChat">Start Chat</button>
+        </div>
+    }
+    else
+    {
+        <div class="messages" @ref="messagesContainer">
+            @foreach (var msg in messages)
+            {
+                <div class="message @(msg.Sender.ToLower())">@msg.Text</div>
+            }
+        </div>
+
+        <EditForm Model="@newMessage" OnValidSubmit="@SendMessage">
+            <div class="chat-input">
+                <InputText @bind-Value="newMessage.Text"
+                           class="input-field"
+                           placeholder="Type your message..."
+                           autocomplete="off" />
+                <button type="submit" class="send-button"
+                        disabled="@string.IsNullOrWhiteSpace(newMessage.Text)">
+                    Send
+                </button>
+            </div>
+        </EditForm>
+    }
+</div>
+
+@code {
+    private bool isChatActive = false;
+    private bool waitingForAgent = false;
+    private bool isBotActive = true;
+
+    private List<ChatMessage> messages = new();
+    private ChatMessage newMessage = new();
+    private int currentThreadId = 0;
+    private ElementReference messagesContainer;
+
+    // 🔥 Nuevo: control del loop
+    private bool keepPolling = true;
+
+    private string? userName;
+    private string? userEmail;
+    private int userId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.LoadUserAsync();
+
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        userName = await Session.GetUserNameAsync();
+        userEmail = await Session.GetUserEmailAsync();
+        userId = await Session.GetUserIdAsync();
+
+        if (string.IsNullOrEmpty(userEmail))
+        {
+            userEmail = Db.Usuarios
+                .Where(u => u.UsuarioId == userId)
+                .Select(u => u.Email)
+                .FirstOrDefault() ?? "unknown@2crre.com";
+        }
+
+        await LoadOrCreateThread();
+    }
+
+    private async Task LoadOrCreateThread()
+    {
+        var thread = Db.ChatThreads
+            .Where(t => t.ClientEmail == userEmail)
+            .OrderByDescending(t => t.CreatedUtc)
+            .FirstOrDefault();
+
+        if (thread == null || thread.State == "Closed")
+        {
+            thread = new ChatThread
+            {
+                State = "Open",
+                ClientName = userName ?? "User",
+                ClientEmail = userEmail,
+                CreatedUtc = DateTime.UtcNow,
+                CreatedByUserId = userId,
+                NeedsAgent = false
+            };
+
+            Db.ChatThreads.Add(thread);
+            await Db.SaveChangesAsync();
+
+            await AddBotMessage(thread.ChatThreadId, $"Hi {userName}! 👋 I'm Marty, your virtual assistant.");
+            await AddBotMessage(thread.ChatThreadId, GetMainMenu());
+        }
+
+        currentThreadId = thread.ChatThreadId;
+        isChatActive = true;
+        waitingForAgent = thread.NeedsAgent;
+        isBotActive = !waitingForAgent;
+
+        await LoadMessages();
+        await StartPolling();   // ⭐ Corrección
+    }
+
+    private async Task StartChat() => await LoadOrCreateThread();
+
+    private async Task SendMessage()
+    {
+        if (string.IsNullOrWhiteSpace(newMessage.Text)) return;
+
+        var msg = new ChatMessage
+        {
+            ChatThreadId = currentThreadId,
+            Sender = "Client",
+            Text = newMessage.Text.Trim(),
+            SentUtc = DateTime.UtcNow,
+            UsuarioId = userId
+        };
+
+        Db.ChatMessages.Add(msg);
+        await Db.SaveChangesAsync();
+
+        newMessage.Text = string.Empty;
+        await LoadMessages();
+        await ScrollToBottom();
+
+        if (waitingForAgent)
+        {
+            await AddBotMessage(currentThreadId, "An agent will be with you shortly 😄 please hang tight...");
+            await LoadMessages();
+            await ScrollToBottom();
+            return;
+        }
+
+        if (isBotActive)
+            await ProcessBotResponse(msg.Text);
+    }
+
+    private async Task ProcessBotResponse(string input)
+    {
+        var response = GetBotResponse(input);
+
+        if (response.Contains("agent"))
+        {
+            isBotActive = false;
+            waitingForAgent = true;
+
+            var thread = Db.ChatThreads.Find(currentThreadId);
+            if (thread != null)
+            {
+                thread.NeedsAgent = true;
+                await Db.SaveChangesAsync();
+            }
+        }
+
+        await AddBotMessage(currentThreadId, response);
+        await LoadMessages();
+        await ScrollToBottom();
+    }
+
+    private async Task AddBotMessage(int threadId, string text)
+    {
+        var botMsg = new ChatMessage
+        {
+            ChatThreadId = threadId,
+            Sender = "Bot",
+            Text = text,
+            SentUtc = DateTime.UtcNow
+        };
+        Db.ChatMessages.Add(botMsg);
+        await Db.SaveChangesAsync();
+    }
+
+    private async Task LoadMessages()
+    {
+        messages = Db.ChatMessages
+            .Where(m => m.ChatThreadId == currentThreadId)
+            .OrderBy(m => m.ChatMessageId)
+            .ToList();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // 🔥 Polling SEGURO sin Timer
+    private async Task StartPolling()
+    {
+        keepPolling = true;
+
+        while (keepPolling)
+        {
+            await PollForNewMessages();
+            await Task.Delay(3000);
+        }
+    }
+
+    private async Task PollForNewMessages()
+    {
+        var lastId = messages.LastOrDefault()?.ChatMessageId ?? 0;
+        var newMsgs = Db.ChatMessages
+            .Where(m => m.ChatThreadId == currentThreadId && m.ChatMessageId > lastId)
+            .OrderBy(m => m.ChatMessageId)
+            .ToList();
+
+        if (newMsgs.Any())
+        {
+            messages.AddRange(newMsgs);
+            await InvokeAsync(StateHasChanged);
+            await ScrollToBottom();
+
+            if (newMsgs.Any(m => m.Sender == "Agent"))
+            {
+                waitingForAgent = false;
+                isBotActive = false;
+            }
+        }
+    }
+
+    private async Task ScrollToBottom()
+    {
+        try { await JSRuntime.InvokeVoidAsync("scrollToBottom", messagesContainer); } catch { }
+    }
+
+    private string GetMainMenu()
+    {
+        return "Please choose an option:\n" +
+               "1️⃣ Plans & pricing\n" +
+               "2️⃣ Documentation\n" +
+               "3️⃣ Working hours & contact info\n" +
+               "4️⃣ Talk to a human agent 👩‍💼\n" +
+               "0️⃣ Back to main menu";
+    }
+
+    private string GetBotResponse(string input)
+    {
+        var q = (input ?? "").Trim().ToLowerInvariant();
+
+        if (q == "0") return GetMainMenu();
+
+        if (q == "4" || q.Contains("agent") || q.Contains("support"))
+            return "Got it 👍 I’ll connect you with one of our agents shortly.";
+
+        if (q == "1" || q.Contains("price") || q.Contains("plan"))
+            return "We offer three plans: Basic ($29), Pro ($79), and Enterprise (custom pricing). Type 0 to go back.";
+
+        if (q == "2" || q.Contains("doc") || q.Contains("guide"))
+            return "You can find our documentation under the Help Center. Type 0 to go back.";
+
+        if (q == "3" || q.Contains("contact") || q.Contains("hours") || q.Contains("email"))
+            return "Our working hours are Mon–Fri, 9am–6pm (GMT-6). Email: support@2crre.com 📧";
+
+        return "I didn’t quite get that 🤔\n" + GetMainMenu();
+    }
+
+    // 🔥 Nuevo Dispose
+    public void Dispose()
+    {
+        keepPolling = false;
+    }
+}
+
+<style>
+    body {
+        margin: 0;
+        font-family: 'Montserrat', sans-serif;
+        background-color: #f5f5f5;
+    }
+
+    .chat-header {
+        background-color: #0d505a;
+        color: white;
+        display: flex;
+        align-items: center;
+        padding: 1rem 2rem;
+    }
+
+    .chat-logo {
+        height: 45px;
+        margin-right: 1rem;
+        cursor: pointer;
+    }
+
+    .chat-container {
+        max-width: 800px;
+        margin: 2rem auto;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        height: 75vh;
+    }
+
+    .messages {
+        flex: 1;
+        overflow-y: auto;
+        background: #fafafa;
+        border-radius: 5px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .message {
+        max-width: 70%;
+        padding: 0.75rem 1rem;
+        border-radius: 15px;
+        font-size: 0.95rem;
+        line-height: 1.4;
+    }
+
+        .message.client {
+            align-self: flex-end;
+            background-color: #0d505a;
+            color: white;
+            border-bottom-right-radius: 0;
+        }
+
+        .message.bot, .message.agent {
+            align-self: flex-start;
+            background-color: #e1e1e1;
+            color: #333;
+            border-bottom-left-radius: 0;
+        }
+
+    .chat-input {
+        display: flex;
+    }
+
+    .input-field {
+        flex: 1;
+        padding: 0.75rem;
+        border: 1px solid #ccc;
+        border-radius: 5px 0 0 5px;
+    }
+
+    .send-button {
+        background: #0d505a;
+        color: white;
+        border: none;
+        border-radius: 0 5px 5px 0;
+        padding: 0.75rem 1.25rem;
+        cursor: pointer;
+        font-size: 1rem;
+    }
+
+        .send-button:hover {
+            background: #093e47;
+        }
+
+    .init-form {
+        margin: auto;
+        text-align: center;
+    }
+
+    .btn-start {
+        background: #0d505a;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.75rem 1.25rem;
+        cursor: pointer;
+        font-weight: 600;
+    }
+
+        .btn-start:hover {
+            background: #093e47;
+        }
+</style>

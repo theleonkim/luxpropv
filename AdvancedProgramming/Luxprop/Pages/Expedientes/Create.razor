@@ -1,0 +1,253 @@
+﻿@page "/expedientes/create/{PropiedadId:int}"
+@using Luxprop.Data.Models
+@inject LuxpropContext Db
+@inject NavigationManager Navigation
+@inject Luxprop.Services.SessionService Session
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Create Case File</PageTitle>
+
+<div class="create-container">
+    <div class="create-card shadow">
+        <h2 class="form-title">Create Case File</h2>
+
+        <EditForm Model="newCase" OnValidSubmit="SaveCase">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+
+            <!-- Código -->
+            <div class="form-group">
+                <label>Case Code</label>
+                <InputText class="form-control" placeholder="E.g. EXP-2025-001" @bind-Value="newCase.Codigo" />
+            </div>
+
+            <!-- Tipo de ocupación -->
+            <div class="form-group">
+                <label>Occupation Type</label>
+                <InputText class="form-control" @bind-Value="newCase.TipoOcupacion" />
+            </div>
+
+            <!-- Prioridad -->
+            <div class="form-group">
+                <label>Priority</label>
+                <InputSelect class="form-select" @bind-Value="newCase.Prioridad">
+                    <option value="">-- Select Priority --</option>
+                    <option>Low</option>
+                    <option>Normal</option>
+                    <option>High</option>
+                    <option>Urgent</option>
+                </InputSelect>
+            </div>
+
+            <!-- Categoría -->
+            <div class="form-group">
+                <label>Category</label>
+                <InputSelect class="form-select" @bind-Value="newCase.Categoria">
+                    <option value="">-- Select Category --</option>
+                    <option>Purchase</option>
+                    <option>Rental</option>
+                    <option>Maintenance</option>
+                    <option>Legal</option>
+                </InputSelect>
+            </div>
+
+            <!-- Estado -->
+            <div class="form-group">
+                <label>Status</label>
+                <InputSelect class="form-select" @bind-Value="newCase.Estado">
+                    <option>Abierto</option>
+                    <option>En proceso</option>
+                    <option>Cerrado</option>
+                </InputSelect>
+            </div>
+
+            <!-- Descripción -->
+            <div class="form-group">
+                <label>Description</label>
+                <InputTextArea class="form-control" rows="3" @bind-Value="newCase.Descripcion" />
+            </div>
+
+            <!-- Seleccionar cliente -->
+            <div class="form-group">
+                <label>Select Client (Buyer)</label>
+                <InputSelect class="form-select" @bind-Value="newCase.ClienteId">
+                    <option value="">-- Select Buyer --</option>
+
+                    @foreach (var c in Buyers)
+                    {
+                        <option value="@c.ClienteId">@c.Usuario.Nombre @c.Usuario.Apellido</option>
+                    }
+                </InputSelect>
+            </div>
+
+            <div class="buttons">
+                <button type="button" class="btn btn-outline-secondary" @onclick="Cancel">Back</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private List<Cliente> Buyers = new();
+
+    [Parameter] public int PropiedadId { get; set; }
+    private Expediente newCase = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 🔹 Cargar la propiedad con su agente asignado
+        var propiedad = await Db.Propiedads
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.PropiedadId == PropiedadId);
+
+        if (propiedad == null)
+        {
+            Navigation.NavigateTo("/properties");
+            return;
+        }
+
+        // 📌 Siempre asignar el agente de la propiedad (si tiene)
+        newCase.AgenteId = propiedad.AgenteId;
+
+        // Si no tiene agente asignado, usar el usuario actual SOLO si es agente
+        var role = (await Session.GetUserRoleAsync())?.Trim().ToLower();
+
+        if (newCase.AgenteId == null && (role == "agente" || role == "agent"))
+        {
+            newCase.AgenteId = await Session.GetUserIdAsync();
+        }
+
+        newCase.PropiedadId = PropiedadId;
+        newCase.Estado = "Abierto";
+        newCase.FechaApertura = DateOnly.FromDateTime(DateTime.Now);
+        newCase.Prioridad = "Normal";
+
+        // ▶️ Traer SOLO Buyeres desde la tabla Cliente
+        Buyers = await Db.Clientes
+            .Include(c => c.Usuario)
+            .Where(c => c.Usuario.UsuarioRols.Any(r => r.RolId == 4))  // Rol Buyer
+            .ToListAsync();
+    }
+
+    private async Task SaveCase()
+    {
+        if (string.IsNullOrWhiteSpace(newCase.Codigo) || newCase.ClienteId == 0)
+            return;
+
+        Db.Expedientes.Add(newCase);
+        await Db.SaveChangesAsync();
+
+        Navigation.NavigateTo($"/expedientes/details/{newCase.ExpedienteId}");
+    }
+
+    private void Cancel() => Navigation.NavigateTo("/properties");
+}
+
+
+<style>
+    /* === Layout general === */
+    .create-container {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        padding-top: 60px;
+        padding-bottom: 60px;
+        background-color: #f8fafc;
+        min-height: 100vh;
+    }
+
+    .create-card {
+        background: #fff;
+        border-radius: 18px;
+        padding: 2.5rem;
+        width: 100%;
+        max-width: 540px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+        transition: all 0.3s ease-in-out;
+    }
+
+        .create-card:hover {
+            box-shadow: 0 14px 48px rgba(0, 0, 0, 0.1);
+        }
+
+    .form-title {
+        text-align: center;
+        color: #0f4e56;
+        font-weight: 700;
+        font-size: 1.7rem;
+        margin-bottom: 1.8rem;
+    }
+
+    /* === Formulario === */
+    .form-group {
+        margin-bottom: 1.2rem;
+    }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            color: #36454F;
+            margin-bottom: 6px;
+        }
+
+    .form-control,
+    .form-select {
+        width: 100%;
+        padding: 0.6rem 0.8rem;
+        border: 1px solid #cfd9df;
+        border-radius: 10px;
+        font-size: 1rem;
+        transition: border-color 0.2s ease;
+    }
+
+        .form-control:focus,
+        .form-select:focus {
+            border-color: #0f4e56;
+            box-shadow: 0 0 0 0.15rem rgba(15, 78, 86, 0.15);
+            outline: none;
+        }
+
+    textarea.form-control {
+        resize: vertical;
+    }
+
+    /* === Botones === */
+    .buttons {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 1.6rem;
+    }
+
+    .btn {
+        border-radius: 10px;
+        font-weight: 600;
+        padding: 0.6rem 1.4rem;
+        font-size: 1rem;
+    }
+
+    .btn-primary {
+        background-color: #0f4e56;
+        border: none;
+    }
+
+        .btn-primary:hover {
+            background-color: #0d4047;
+        }
+
+    .btn-outline-secondary {
+        border: 1px solid #cfd9df;
+        color: #36454F;
+        background: #fff;
+    }
+
+        .btn-outline-secondary:hover {
+            background-color: #f4f6f8;
+        }
+
+    /* === Sombras suaves === */
+    .shadow {
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.05);
+    }
+</style>

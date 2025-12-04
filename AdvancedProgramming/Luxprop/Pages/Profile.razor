@@ -1,0 +1,136 @@
+@page "/profile"
+@using Luxprop.Services
+@inject SessionService SessionService
+@inject NavigationManager Navigation
+
+<PageTitle>My Profile - 2CRRE Docs</PageTitle>
+
+<div class="profile-page">
+
+    <div class="profile-card">
+        <h2 class="profile-title">My Profile</h2>
+
+        <div class="profile-section">
+
+            <div class="profile-item">
+                <span class="label">Name:</span>
+                <span class="value">@userName</span>
+            </div>
+
+            <div class="profile-item">
+                <span class="label">Email:</span>
+                <span class="value">@email</span>
+            </div>
+
+            <div class="profile-item">
+                <span class="label">Role:</span>
+                <span class="value role">@roleRaw (@roleNormalized)</span>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+@code {
+    private string userName = "";
+    private string email = "";
+    private string roleRaw = "";
+    private string roleNormalized = "";
+    private int userId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await SessionService.LoadUserAsync();
+
+        userName = await SessionService.GetUserNameAsync() ?? "";
+        email = await SessionService.GetUserEmailAsync() ?? "";
+        roleRaw = await SessionService.GetUserRoleAsync() ?? "";
+        roleNormalized = NormalizeRole(roleRaw);
+        userId = await SessionService.GetUserIdAsync();
+    }
+
+    private void GoToEdit()
+    {
+        Navigation.NavigateTo("/profile/edit");
+    }
+
+    private static string NormalizeRole(string? r)
+    {
+        var n = r?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "Administrador",
+            "agente" or "agent" => "Agent",
+            "vendedor" or "seller" => "Seller",
+            "comprador" or "buyer" or "cliente" => "Buyer",
+            _ => "User"
+        };
+    }
+}
+
+<style>
+    .profile-page {
+        padding: 2rem;
+        display: flex;
+        justify-content: center;
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    .profile-card {
+        width: 480px;
+        background-color: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.1);
+    }
+
+    .profile-title {
+        text-align: center;
+        color: #0d505a;
+        font-size: 1.8rem;
+        font-weight: 700;
+        margin-bottom: 1.8rem;
+    }
+
+    .profile-section {
+        margin-bottom: 2rem;
+    }
+
+    .profile-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+    }
+
+        .profile-item .label {
+            font-weight: 600;
+            color: #0d505a;
+        }
+
+        .profile-item .value {
+            font-weight: 500;
+        }
+
+        .profile-item .role {
+            font-style: italic;
+        }
+
+    .btn-edit {
+        width: 100%;
+        padding: 0.8rem;
+        background-color: #0d505a;
+        color: white;
+        font-size: 1.1rem;
+        font-weight: 600;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+        .btn-edit:hover {
+            background-color: #093e47;
+        }
+</style>

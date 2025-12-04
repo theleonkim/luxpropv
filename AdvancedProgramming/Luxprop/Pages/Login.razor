@@ -1,0 +1,280 @@
+﻿@page "/login"
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Luxprop.Models
+@using Luxprop.Services
+@inject LuxpropContext Db
+@inject PasswordHelper PasswordHelper
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@inject SessionService SessionService
+
+<PageTitle>Login - Luxprop</PageTitle>
+
+<div class="login-page">
+
+    <main>
+        <section class="login-container">
+
+            <!-- HEADER DEL LOGIN -->
+            <div class="login-header">
+                <img src="https://i.imgur.com/nmN7x14.png" alt="2CRRE Logo" class="logo" />
+                <span class="title">2CRRE Docs</span>
+            </div>
+
+            <h2>Login</h2>
+
+            <EditForm Model="@loginModel" OnValidSubmit="@HandleLogin">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <!-- EMAIL -->
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <InputText id="email"
+                               @bind-Value="loginModel.Email"
+                               class="form-control"
+                               placeholder="Enter your email" />
+                    <ValidationMessage For="@(() => loginModel.Email)" />
+                </div>
+
+                <!-- PASSWORD -->
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <InputText id="password"
+                               type="password"
+                               @bind-Value="loginModel.Password"
+                               class="form-control"
+                               placeholder="Enter your password" />
+                    <ValidationMessage For="@(() => loginModel.Password)" />
+                </div>
+
+                <!-- FORGOT PASSWORD -->
+                <div class="forgot-container">
+                    <a href="/forgot-password" class="forgot-link">Forgot your password?</a>
+                </div>
+
+
+                <!-- BOTÓN LOGIN -->
+                <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                    Login
+                </button>
+
+                <!-- MENSAJE ERROR -->
+                @if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    <p class="error-message">@errorMessage</p>
+                }
+
+            </EditForm>
+        </section>
+    </main>
+</div>
+
+@code {
+    private LoginVM loginModel = new();
+    private bool isLoading = false;
+    private string errorMessage = string.Empty;
+
+    private async Task HandleLogin()
+    {
+        isLoading = true;
+        errorMessage = string.Empty;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(loginModel.Email) || string.IsNullOrWhiteSpace(loginModel.Password))
+            {
+                errorMessage = "Please enter your email and password.";
+                return;
+            }
+
+            var hashed = PasswordHelper.HashPassword(loginModel.Password);
+
+            var user = await Db.Usuarios
+                .Include(u => u.UsuarioRols)
+                    .ThenInclude(ur => ur.Rol)
+                .FirstOrDefaultAsync(u => u.Email == loginModel.Email && u.Password == hashed);
+
+            if (user is null)
+            {
+                errorMessage = "Invalid credentials. Please try again.";
+                return;
+            }
+
+            var roleNameRaw = user.UsuarioRols
+                .Select(ur => ur.Rol?.Nombre)
+                .FirstOrDefault() ?? string.Empty;
+
+            var role = NormalizeRole(roleNameRaw);
+
+            await SessionService.SetUserAsync(user.UsuarioId, user.Nombre, roleNameRaw, user.Email);
+
+            switch (role)
+            {
+                case "admin": Navigation.NavigateTo("/dashboard", true); break;
+                case "agent": Navigation.NavigateTo("/dashboardagent", true); break;
+                case "seller": Navigation.NavigateTo("/dashboardvend", true); break;
+                case "buyer": Navigation.NavigateTo("/dashboardcomp", true); break;
+                default: Navigation.NavigateTo("/dashboard", true); break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Login error: {ex.Message}");
+            errorMessage = "An error occurred during login.";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => string.Empty
+        };
+    }
+
+    private void NavigateToCreateUser()
+    {
+        Navigation.NavigateTo("/user/create", true);
+    }
+}
+
+<style>
+    .login-page {
+        margin: 0;
+        background-color: #f5f5f5;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    .login-container {
+        width: 420px;
+        background-color: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.1);
+    }
+
+    /* Encabezado verde */
+    .login-header {
+        background-color: #0d505a;
+        padding: 1.5rem 0;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 1.8rem;
+    }
+
+        .login-header .logo {
+            height: 60px;
+            margin-bottom: 0.5rem;
+        }
+
+        .login-header .title {
+            color: white;
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+    h2 {
+        text-align: center;
+        color: #0d505a;
+        margin-bottom: 2rem;
+        font-weight: 700;
+    }
+
+    .form-group {
+        margin-bottom: 1.2rem;
+    }
+
+    label {
+        font-weight: 600;
+        margin-bottom: 0.3rem;
+        display: block;
+    }
+
+    /* Inputs sin línea azul */
+    .form-control {
+        width: 100%;
+        padding: 0.6rem;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        outline: none !important;
+        box-shadow: none !important;
+        font-size: 1rem;
+    }
+
+        .form-control:focus {
+            border-color: #0d505a;
+        }
+
+    .forgot-container {
+        text-align: right;
+        margin-top: -5px;
+        margin-bottom: 1rem;
+    }
+
+    .forgot-link {
+        font-size: 0.9rem;
+        color: #0d505a;
+        text-decoration: none;
+        font-weight: 500;
+    }
+
+        .forgot-link:hover {
+            text-decoration: underline;
+        }
+
+    .btn {
+        width: 100%;
+        padding: 0.75rem;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        border: none;
+        margin-bottom: 0.6rem;
+        cursor: pointer;
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    .btn-primary {
+        background-color: #0d505a;
+        color: #fff;
+    }
+
+        .btn-primary:hover {
+            background-color: #093e47;
+        }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: #fff;
+    }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+
+    .error-message {
+        color: red;
+        text-align: center;
+        margin-top: 1rem;
+        font-weight: 500;
+    }
+</style>

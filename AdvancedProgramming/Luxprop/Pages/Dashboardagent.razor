@@ -1,0 +1,398 @@
+﻿@page "/dashboardagent"
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@inject LuxpropContext Db
+@inject Luxprop.Services.SessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>Agent Dashboard</PageTitle>
+
+@if (!loaded)
+{
+    <div class="loading-container">
+        <div class="spinner-border text-primary"></div>
+        <p>Loading dashboard…</p>
+    </div>
+}
+else if (!authorized)
+{
+    <div class="unauthorized-container">
+        <h2>Unauthorized</h2>
+        <p>You do not have permission to view this page.</p>
+    </div>
+}
+else
+{
+    <div class="dashboard-wrapper">
+
+        <!-- HEADER -->
+        <div class="dashboard-hero agent-hero">
+            <div>
+                <h1>Agent Dashboard</h1>
+                <p>Overview of your listings, cases and deadlines.</p>
+            </div>
+
+            <div class="hero-actions">
+                <a class="btn btn-light" href="/properties"><i class="bi bi-building"></i> Manage Properties</a>
+                <a class="btn btn-outline-light" href="/records"><i class="bi bi-folder2"></i> Case Records</a>
+            </div>
+        </div>
+
+        <!-- KPI GRID -->
+        <div class="kpi-grid">
+
+            <div class="dashboard-card">
+                <h3 class="card-title">Total Properties</h3>
+                <div class="kpi-container">
+                    <div class="kpi-number">@totalProperties</div>
+                    <i class="bi bi-houses kpi-icon text-primary"></i>
+                </div>
+            </div>
+
+            <div class="dashboard-card">
+                <h3 class="card-title">Active Properties</h3>
+                <div class="kpi-container">
+                    <div class="kpi-number">@activeProperties</div>
+                    <i class="bi bi-lightning-charge kpi-icon text-success"></i>
+                </div>
+            </div>
+
+            <div class="dashboard-card">
+                <h3 class="card-title">Cases</h3>
+                <div class="kpi-container">
+                    <div class="kpi-number">@totalCases</div>
+                    <i class="bi bi-folder2-open kpi-icon text-info"></i>
+                </div>
+            </div>
+
+            <div class="dashboard-card">
+                <h3 class="card-title">Active Cases</h3>
+                <div class="kpi-container">
+                    <div class="kpi-number">@activeCases</div>
+                    <i class="bi bi-activity kpi-icon text-warning"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- MAIN CONTENT GRID -->
+        <div class="dashboard-grid">
+
+            <!-- Recent Properties -->
+            <div class="dashboard-card">
+                <h3 class="card-title">Recent Properties</h3>
+
+                @if (recentProperties.Any())
+                {
+                    <ul class="list-items">
+                        @foreach (var p in recentProperties.Take(6))
+                        {
+                            <li class="item-row">
+                                <div>
+                                    <strong>@p.Titulo</strong>
+                                    <div class="meta">ID: @p.PropiedadId</div>
+                                </div>
+                                <span class="badge @GetPropertyStatusBadge(p.EstadoPublicacion)">
+                                    @p.EstadoPublicacion
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+
+                    <p class="empty-text">No recent properties.</p>
+                }
+            </div>
+
+            <!-- Recent Cases -->
+            <div class="dashboard-card">
+                <h3 class="card-title">Recent Case Files</h3>
+
+                @if (recentCases.Any())
+                {
+                    <ul class="list-items">
+                        @foreach (var c in recentCases.Take(6))
+                        {
+                            <li class="item-row">
+                                <div>
+                                    <strong>Case #@c.ExpedienteId</strong>
+                                    <div class="meta">Opened: @c.FechaApertura?.ToString("yyyy-MM-dd")</div>
+                                </div>
+
+                                <span class="badge @GetCaseStatusBadge(c.Estado)">
+                                    @c.Estado
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+
+                    <p class="empty-text">No case files.</p>
+                }
+            </div>
+
+            <!-- Expiring Documents -->
+            <div class="dashboard-card">
+                <h3 class="card-title">Documents Expiring Soon</h3>
+
+                @if (docsToExpire.Any())
+                {
+                    <ul class="list-items">
+                        @foreach (var d in docsToExpire.Take(6))
+                        {
+                            <li class="item-row">
+                                <span>@d.Nombre</span>
+                                <span class="text-danger">@d.FechaVencimiento?.ToString("yyyy-MM-dd")</span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+
+                    <p class="empty-text">No expiring documents.</p>
+                }
+            </div>
+
+            <!-- Upcoming Reminders -->
+            <div class="dashboard-card">
+                <h3 class="card-title">Upcoming Reminders</h3>
+
+                @if (upcomingReminders.Any())
+                {
+                    <ul class="list-items">
+                        @foreach (var r in upcomingReminders.Take(6))
+                        {
+                            <li class="item-row">
+                                <span>@r.Titulo</span>
+                                <span class="meta">@r.Inicio.ToString("yyyy-MM-dd")</span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+
+                    <p class="empty-text">No upcoming reminders.</p>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Documento> docsToExpire = new();
+    private List<Recordatorio> upcomingReminders = new();
+
+    private bool loaded, authorized, firstPass;
+    private int totalProperties, activeProperties;
+    private List<Propiedad> recentProperties = new();
+
+    private int totalCases, activeCases;
+    private List<Expediente> recentCases = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || firstPass) return;
+        firstPass = true;
+
+        await Session.LoadUserAsync();
+        var role = NormalizeRole(await Session.GetUserRoleAsync());
+
+        if (string.IsNullOrWhiteSpace(role))
+        {
+            await Task.Delay(50);
+            role = NormalizeRole(await Session.GetUserRoleAsync());
+            if (string.IsNullOrWhiteSpace(role)) return;
+        }
+
+        authorized = role == "agent";
+        if (!authorized)
+        {
+            var target = role switch
+            {
+                "admin" => "/dashboard",
+                "seller" => "/dashboardvend",
+                "buyer" => "/dashboardcomp",
+                _ => "/login"
+            };
+            Nav.NavigateTo(target, true);
+            return;
+        }
+
+        // 🟦 USER ID del agente logueado
+        var userId = await Session.GetUserIdAsync() ;
+
+
+        // 🟩 FILTRAR PROPIEDADES DEL AGENTE
+        var allProps = Db.Propiedads
+            .Where(p => p.AgenteId == userId)
+            .OrderByDescending(p => p.PropiedadId)
+            .ToList();
+
+        totalProperties = allProps.Count;
+        activeProperties = allProps.Count(p => p.EstadoPublicacion == "Active");
+        recentProperties = allProps;
+
+        // 🟧 FILTRAR CASOS SOLO DE PROPIEDADES DEL AGENTE
+        var propIds = allProps.Select(p => p.PropiedadId).ToList();
+
+        var allCases = Db.Expedientes
+            .Where(e => propIds.Contains(e.PropiedadId ?? 0))
+            .OrderByDescending(e => e.ExpedienteId)
+            .ToList();
+
+        totalCases = allCases.Count;
+        activeCases = allCases.Count(e => e.Estado == "Activo" || e.Estado == "En proceso");
+        recentCases = allCases;
+
+        // 🟪 Documentos próximos a vencer
+        docsToExpire = Db.Documentos
+            .Where(d => d.FechaVencimiento.HasValue &&
+                        d.FechaVencimiento.Value.Date >= DateTime.Now.Date &&
+                        d.FechaVencimiento.Value.Date <= DateTime.Now.AddDays(7).Date)
+            .OrderBy(d => d.FechaVencimiento)
+            .ToList();
+
+        // 🟦 Reminders próximos
+        upcomingReminders = Db.Recordatorios
+            .Where(r =>
+                r.Inicio >= DateTime.Now &&
+                r.Inicio <= DateTime.Now.AddDays(7))
+            .OrderBy(r => r.Inicio)
+            .ToList();
+
+        loaded = true;
+        StateHasChanged();
+    }
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => string.Empty
+        };
+    }
+
+    private static string GetPropertyStatusBadge(string? status) =>
+        status?.ToLowerInvariant() switch
+        {
+            "active" or "activo" => "bg-success text-white",
+            "pending" or "pendiente" => "bg-warning text-dark",
+            _ => "bg-secondary text-white"
+        };
+
+    private static string GetCaseStatusBadge(string? status) =>
+        status?.ToLowerInvariant() switch
+        {
+            "abierto" or "open" => "bg-primary",
+            "en proceso" or "in progress" => "bg-warning text-dark",
+            "cerrado" or "closed" => "bg-success",
+            _ => "bg-secondary"
+        };
+}
+
+<style>
+    /* GENERAL */
+    .dashboard-wrapper {
+        padding: 2rem;
+        background-color: #f8f9fa;
+        min-height: 100vh;
+    }
+
+    /* HERO */
+    .dashboard-hero {
+        border-radius: 18px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .agent-hero {
+        background: linear-gradient(135deg, #0d505a, #146b74);
+    }
+
+    .hero-actions .btn {
+        margin-left: 0.5rem;
+    }
+
+    /* KPI CARDS */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+
+    .kpi-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .kpi-number {
+        font-size: 2.2rem;
+        font-weight: bold;
+    }
+
+    .kpi-icon {
+        font-size: 2.3rem;
+        opacity: 0.85;
+    }
+
+    /* GRID CARDS */
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+        gap: 1.5rem;
+    }
+
+    .dashboard-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+    }
+
+    .card-title {
+        font-size: 1.2rem;
+        color: #0d505a;
+        margin-bottom: 1rem;
+    }
+
+    /* LIST ITEMS */
+    .list-items {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .item-row {
+        padding: 0.65rem 0;
+        border-bottom: 1px solid #ececec;
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .meta {
+        font-size: 0.85rem;
+        color: #777;
+    }
+
+    .empty-text {
+        text-align: center;
+        font-style: italic;
+        color: #888;
+    }
+</style>

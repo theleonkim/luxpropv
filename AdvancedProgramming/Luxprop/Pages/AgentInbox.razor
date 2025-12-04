@@ -1,0 +1,129 @@
+﻿@page "/agent-inbox"
+@using Luxprop.Data.Models
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Nav
+@inject Luxprop.Services.SessionService Session
+
+<h3>Agent Inbox</h3>
+
+@if (notifications.Count == 0)
+{
+    <p>No new chats yet.</p>
+}
+else
+{
+    <ul>
+        @foreach (var n in notifications)
+        {
+            <li>
+                <strong>@n.ClientName</strong> — @n.ClientEmail
+                <button class="btn btn-sm btn-primary" @onclick="() => JoinThread(n.ThreadId)">
+                    Open
+                </button>
+            </li>
+        }
+    </ul>
+}
+
+@if (activeThreadId > 0)
+{
+    <h4>Thread #@activeThreadId</h4>
+    <div style="max-height:300px;overflow:auto;border:1px solid #ddd;padding:.5rem;">
+        @foreach (var m in messages)
+        {
+            <div><b>@m.Sender:</b> @m.Text <small>(@m.SentUtc.ToLocalTime().ToString("HH:mm"))</small></div>
+        }
+    </div>
+    <div style="margin-top:.5rem;">
+        <input @bind="draft" style="width:70%;" />
+        <button class="btn btn-sm btn-success" @onclick="SendAgentMessage">Send</button>
+    </div>
+}
+
+@code {
+    private HubConnection? hub;
+    private readonly List<(int ThreadId, string ClientName, string ClientEmail)> notifications = new();
+    private readonly List<ChatMessage> messages = new();
+    private int activeThreadId;
+    private string draft = string.Empty;
+    private int agentId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        agentId = await Session.GetUserIdAsync();
+
+
+        hub = new HubConnectionBuilder()
+            .WithUrl(Nav.ToAbsoluteUri("/hubs/chat"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        hub.On<object>("NewThread", payload =>
+        {
+            try
+            {
+                dynamic d = payload!;
+                notifications.Insert(0, ((int)d.threadId, (string)d.clientName, (string)d.clientEmail));
+                InvokeAsync(StateHasChanged);
+            }
+            catch { }
+        });
+
+        hub.On<object>("NewMessage", payload =>
+        {
+            if (activeThreadId == 0) return;
+            try
+            {
+                dynamic d = payload!;
+                int threadId = (int)d.threadId;
+                if (threadId != activeThreadId) return;
+
+                messages.Add(new ChatMessage
+                {
+                    ChatMessageId = (int)d.messageId,
+                    ChatThreadId = threadId,
+                    Sender = (string)d.sender,
+                    Text = (string)d.text,
+                    SentUtc = (DateTime)d.sentUtc
+                });
+                InvokeAsync(StateHasChanged);
+            }
+            catch { }
+        });
+
+        await hub.StartAsync();
+        // Si ya manejas grupos por agente, únete aquí (cuando uses agent:{id})
+        await hub.SendAsync("JoinAgent", agentId.ToString());
+    }
+
+    private async Task JoinThread(int threadId)
+    {
+        activeThreadId = threadId;
+        notifications.RemoveAll(n => n.ThreadId == threadId);
+
+        // Únete al grupo del hilo para recibir mensajes en vivo
+        await hub!.SendAsync("JoinThread", threadId.ToString());
+
+        // Carga inicial (usa tu endpoint)
+        var http = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+        var data = await http.GetFromJsonAsync<List<ChatMessage>>($"api/chats/{threadId}/messages");
+        messages.Clear();
+        if (data is not null) messages.AddRange(data);
+    }
+
+    private async Task SendAgentMessage()
+    {
+        if (activeThreadId <= 0 || string.IsNullOrWhiteSpace(draft)) return;
+
+        var http = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+        await http.PostAsJsonAsync($"api/chats/{activeThreadId}/messages",
+            new { sender = "Agent", text = draft });
+
+        draft = string.Empty;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hub is not null) await hub.DisposeAsync();
+    }
+}

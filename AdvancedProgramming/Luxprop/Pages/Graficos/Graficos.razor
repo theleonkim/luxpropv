@@ -1,0 +1,180 @@
+﻿@page "/graficos"
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+
+<h2 class="mt-4 mb-4">General Summary</h2>
+
+<div class="row">
+
+    <!-- DOCUMENTS -->
+    <div class="col-md-6">
+        <h4 class="title-section mb-3">Document Status</h4>
+
+        <div class="pie-chart-box">
+            <div class="pie"
+                 style="--p1:@porcCompCss; --p2:@porcPendCss; --p3:@porcVencCss;">
+            </div>
+        </div>
+
+        <ul class="legend">
+            <li><span class="color green"></span> Completed: @completed</li>
+            <li><span class="color yellow"></span> Pending: @pending</li>
+            <li><span class="color red"></span> Expired: @expired</li>
+        </ul>
+    </div>
+
+
+    <!-- TASKS -->
+    <div class="col-md-6">
+        <h4 class="title-section mb-3">Task Status</h4>
+
+        <div class="pie-chart-box">
+            <div class="pie"
+                 style="--p1:@porcTasksDoneCss; --p2:@porcTasksPendingCss; --p3:0deg;">
+            </div>
+        </div>
+
+        <ul class="legend">
+            <li><span class="color green"></span> Completed: @tasksDone</li>
+            <li><span class="color yellow"></span> Pending: @tasksPending</li>
+        </ul>
+    </div>
+
+</div>
+
+<style>
+
+    .title-section {
+        font-weight: 600;
+        color: #0d4651;
+    }
+
+    /* Chart container */
+    .pie-chart-box {
+        width: 260px;
+        height: 260px;
+        margin: 0 auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* Pie chart */
+    .pie {
+        width: 230px;
+        height: 230px;
+        border-radius: 50%;
+        background: conic-gradient( #28a745 0deg var(--p1), #ffc107 var(--p1) calc(var(--p1) + var(--p2)), #dc3545 calc(var(--p1) + var(--p2)) calc(var(--p1) + var(--p2) + var(--p3)) );
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+    }
+
+        /* Donut hole */
+        .pie::before {
+            content: "";
+            width: 120px;
+            height: 120px;
+            background: #fff;
+            border-radius: 50%;
+            z-index: 10;
+        }
+
+    /* Legend */
+    .legend {
+        margin-top: 15px;
+        list-style: none;
+        padding: 0;
+    }
+
+        .legend li {
+            margin: 5px 0;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .legend .color {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            margin-right: 10px;
+            border-radius: 4px;
+        }
+
+    .color.green {
+        background: #28a745;
+    }
+
+    .color.yellow {
+        background: #ffc107;
+    }
+
+    .color.red {
+        background: #dc3545;
+    }
+
+</style>
+
+@code {
+
+    // ---------- DOCUMENTS ----------
+    int completed, pending, expired;
+    double percCompleted, percPending, percExpired;
+    string porcCompCss = "0deg";
+    string porcPendCss = "0deg";
+    string porcVencCss = "0deg";
+
+    // ---------- TASKS ----------
+    int tasksDone, tasksPending;
+    double percTasksDone, percTasksPending;
+    string porcTasksDoneCss = "0deg";
+    string porcTasksPendingCss = "0deg";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDocuments();
+        await LoadTasks();
+    }
+
+    // Load documents and calculate percentages
+    private async Task LoadDocuments()
+    {
+        var today = DateTime.Today;
+        var docs = await Db.Set<Documento>().ToListAsync();
+
+        completed = docs.Count(d => d.Estado == "Completado");
+        pending = docs.Count(d => d.Estado == "Activo" || d.Estado == "En revisión");
+        expired = docs.Count(d => d.FechaVencimiento != null && d.FechaVencimiento < today);
+
+        int total = completed + pending + expired;
+        if (total == 0) total = 1;
+
+        percCompleted = completed * 360.0 / total;
+        percPending = pending * 360.0 / total;
+        percExpired = expired * 360.0 / total;
+
+        porcCompCss = percCompleted + "deg";
+        porcPendCss = percPending + "deg";
+        porcVencCss = percExpired + "deg";
+    }
+
+    // Load tasks and calculate percentages
+    private async Task LoadTasks()
+    {
+        var tasks = await Db.Set<TareaTramite>().ToListAsync();
+
+        tasksDone = tasks.Count(t => t.Estado == "Done");
+        tasksPending = tasks.Count(t => t.Estado == "Pending");
+
+        int totalTasks = tasksDone + tasksPending;
+        if (totalTasks == 0) totalTasks = 1;
+
+        percTasksDone = tasksDone * 360.0 / totalTasks;
+        percTasksPending = tasksPending * 360.0 / totalTasks;
+
+        porcTasksDoneCss = percTasksDone + "deg";
+        porcTasksPendingCss = percTasksPending + "deg";
+    }
+}

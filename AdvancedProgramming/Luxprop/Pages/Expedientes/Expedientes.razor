@@ -1,0 +1,277 @@
+﻿@page "/expedientes"
+@using Luxprop.Data.Models
+@using Luxprop.Business.Services
+@inject IExpedienteService ExpedienteService
+@inject NavigationManager Navigation
+@inject Luxprop.Services.SessionService Session
+@inject IJSRuntime JS
+
+<PageTitle>Case Files - Luxprop</PageTitle>
+
+<div class="cases-page">
+
+    <!-- Filters -->
+    <div class="filters mb-4 d-flex flex-wrap gap-2">
+        <select class="form-select w-auto" @bind="filterStatus">
+            <option value="">Filter by status</option>
+            <option>Open</option>
+            <option>In progress</option>
+            <option>Closed</option>
+        </select>
+
+        <input type="text" class="form-control w-auto" placeholder="Search by property" @bind="filterProperty" />
+        <input type="text" class="form-control w-auto" placeholder="Search by client" @bind="filterClient" />
+
+        <button class="btn btn-export" @onclick="ExportToPDF">Export to PDF</button>
+        <button class="btn btn-export" @onclick="ExportToExcel">Export to Excel</button>
+    </div>
+
+    @if (cases == null)
+    {
+        <div class="loading mt-4">Loading case files...</div>
+    }
+    else if (!cases.Any())
+    {
+        <div class="no-data mt-4">No case files found.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Property</th>
+                        <th>Type</th>
+                        <th>Client</th>
+                        <th>Agent</th>
+                        <th>Status</th>
+                        <th>Opening Date</th>
+                        <th>Last Update</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @foreach (var c in filteredCases)
+                    {
+                        <tr>
+                            <td>@c.Propiedad?.Titulo</td>
+                            <td>@c.Propiedad?.Tipo_Propiedad</td>
+
+                            <td>@($"{c.Cliente?.Usuario?.Nombre} {c.Cliente?.Usuario?.Apellido}")</td>
+
+                            <td>@($"{c.Agente?.Nombre} {c.Agente?.Apellido}")</td>
+
+                            <td>
+                                <span class="badge @(GetBadgeClass(c.Estado))">@c.Estado</span>
+                            </td>
+
+                            <td>@c.FechaApertura?.ToString("yyyy-MM-dd")</td>
+
+                            <td>@c.UltimaActualizacion?.ToString("yyyy-MM-dd")</td>
+
+                            <td>
+                                <div class="action-buttons d-flex gap-1">
+
+                                    <!-- View Button -->
+                                    <a href="/expedientes/details/@c.ExpedienteId"
+                                       class="btn btn-sm btn-outline-success view-btn">
+                                        <i class="bi bi-eye"></i> View
+                                    </a>
+
+                                    <!-- Delete Button -->
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => ConfirmDelete(c.ExpedienteId)">
+                                        <i class="bi bi-trash"></i> Delete
+                                    </button>
+
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Expediente>? cases;
+    private string filterStatus = "";
+    private string filterProperty = "";
+    private string filterClient = "";
+
+    private IEnumerable<Expediente> filteredCases =>
+        cases?
+            .Where(c =>
+                (string.IsNullOrEmpty(filterStatus) || c.Estado == filterStatus) &&
+                (string.IsNullOrEmpty(filterProperty) ||
+                    (c.Propiedad?.Titulo?.Contains(filterProperty, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+                (string.IsNullOrEmpty(filterClient) ||
+                    ($"{c.Cliente?.Usuario?.Nombre} {c.Cliente?.Usuario?.Apellido}"
+                        .Contains(filterClient, StringComparison.OrdinalIgnoreCase)))
+            ) ?? Enumerable.Empty<Expediente>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCases();
+    }
+
+    private async Task LoadCases()
+    {
+        await Session.LoadUserAsync();
+        int userId = await Session.GetUserIdAsync();
+        var rawRole = await Session.GetUserRoleAsync();
+        var role = NormalizeRole(rawRole);
+
+        var all = await ExpedienteService.GetAllAsync();
+
+        cases = role == "agent"
+            ? all.Where(e => e.AgenteId == userId).ToList()
+            : all.ToList();
+    }
+
+    private string GetBadgeClass(string status) => status switch
+    {
+        "Open" => "bg-warning text-dark",
+        "In progress" => "bg-info text-dark",
+        "Closed" => "bg-success",
+        _ => "bg-secondary"
+    };
+
+    private void ExportToPDF() => Console.WriteLine("Exporting PDF...");
+    private void ExportToExcel() => Console.WriteLine("Exporting Excel...");
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "admin" => "admin",
+            "agent" => "agent",
+            "seller" => "seller",
+            "buyer" => "buyer",
+            _ => ""
+        };
+    }
+
+    private async Task ConfirmDelete(int id)
+    {
+        bool confirm = await JS.InvokeAsync<bool>(
+            "confirm",
+            "Are you sure you want to delete this case file? This action cannot be undone.");
+
+        if (!confirm)
+            return;
+
+        try
+        {
+            var ok = await ExpedienteService.DeleteAsync(id);
+
+            if (!ok)
+            {
+                await JS.InvokeVoidAsync("alert", "The case could not be deleted. It may not exist.");
+                return;
+            }
+
+            await LoadCases();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Error deleting case: " + ex.Message);
+            await JS.InvokeVoidAsync("alert", "An error occurred while deleting the case file.");
+        }
+    }
+}
+
+<style>
+
+    /* PAGE WRAPPER */
+    .cases-page {
+        padding: 2rem;
+    }
+
+    /* FILTERS */
+    .filters select,
+    .filters input {
+        min-width: 180px;
+        border-radius: 6px;
+    }
+
+    /* TABLE DESIGN (Luxprop unified style) */
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+        .table th {
+            background-color: #0d505a;
+            color: white;
+            font-size: .85rem;
+            text-transform: uppercase;
+            padding: 1rem;
+        }
+
+        .table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e2e2;
+            vertical-align: middle;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f1f5f6;
+        }
+
+    /* BADGES */
+    .badge {
+        padding: .45rem .7rem;
+        font-size: .75rem;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    /* EXPORT BUTTONS */
+    .btn-export {
+        background-color: #0d505a;
+        color: white;
+        border-radius: 6px;
+        padding: .45rem 1rem;
+        font-size: .85rem;
+    }
+
+        .btn-export:hover {
+            background-color: #093e47;
+        }
+
+    /* VIEW BUTTON */
+    .view-btn {
+        border: 2px solid #28a745 !important;
+        color: #28a745 !important;
+        font-weight: 600;
+    }
+
+        .view-btn:hover {
+            background-color: #28a745 !important;
+            color: white !important;
+        }
+
+    /* DELETE BUTTON */
+    .btn-outline-danger:hover {
+        background-color: #c82333;
+        color: white;
+    }
+
+    /* LOADING / NO DATA */
+    .loading,
+    .no-data {
+        text-align: center;
+        padding: 2rem;
+        font-size: 1.2rem;
+        color: #0d505a;
+    }
+
+</style>

@@ -1,0 +1,213 @@
+﻿@page "/tramites"
+@using Luxprop.Data.Models
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+
+<PageTitle>Tasks - Luxprop</PageTitle>
+
+<div class="tasks-page">
+    <div class="page-header">
+        <h1>Tasks</h1>
+
+        <!-- FILTERS -->
+        <div class="header-actions">
+
+            <!-- STATUS FILTER -->
+            <select @onchange="OnStatusFilterChanged" class="form-select" style="max-width:180px;">
+                <option value="">-- All Status --</option>
+                @foreach (var estado in availableStatus)
+                {
+                    <option value="@estado">@estado</option>
+                }
+            </select>
+
+            <!-- CASE FILTER -->
+            <select @onchange="OnCaseFilterChanged" class="form-select" style="max-width:180px;">
+                <option value="">-- All Case Files --</option>
+                @foreach (var exp in availableCases)
+                {
+                    <option value="@exp">Case #@exp</option>
+                }
+            </select>
+
+        </div>
+    </div>
+
+    @if (tasks == null)
+    {
+        <div class="loading">Loading tasks...</div>
+    }
+    else if (!tasks.Any())
+    {
+        <div class="no-data">No tasks found.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Task ID</th>
+                        <th>Case File</th>
+                        <th>Title</th>
+                        <th>Status</th>
+                        <th>Start Date</th>
+                        <th>Closing Date</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @foreach (var t in tasks)
+                    {
+                        <tr>
+                            <td>@t.TareaId</td>
+                            <td>@t.ExpedienteId</td>
+                            <td>@t.Titulo</td>
+
+                            <td>
+                                <span class="badge @(t.Estado == "Done" ? "bg-success" : "bg-warning text-dark")">
+                                    @t.Estado
+                                </span>
+                            </td>
+
+                            <td>@(t.FechaInicio?.ToString("yyyy-MM-dd") ?? "—")</td>
+                            <td>@(t.FechaCierre?.ToString("yyyy-MM-dd") ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+
+    private List<TareaTramite>? tasks;
+    private string selectedStatus = "";
+    private string selectedCase = "";
+
+    private List<string> availableStatus = new()
+    {
+        "Pending",
+        "Done"
+    };
+
+    private List<int> availableCases = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTasks();
+        LoadCases();
+    }
+
+    private async Task LoadTasks()
+    {
+        tasks = await Db.TareaTramites.ToListAsync();
+    }
+
+    private void LoadCases()
+    {
+        availableCases = Db.TareaTramites
+            .Select(t => t.ExpedienteId)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToList();
+    }
+
+    private void OnStatusFilterChanged(ChangeEventArgs e)
+    {
+        selectedStatus = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private void OnCaseFilterChanged(ChangeEventArgs e)
+    {
+        selectedCase = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var query = Db.TareaTramites.AsQueryable();
+
+        if (!string.IsNullOrEmpty(selectedStatus))
+            query = query.Where(t => t.Estado == selectedStatus);
+
+        if (!string.IsNullOrEmpty(selectedCase))
+            query = query.Where(t => t.ExpedienteId.ToString() == selectedCase);
+
+        tasks = query.ToList();
+        StateHasChanged();
+    }
+}
+
+<style>
+
+    .tasks-page {
+        padding: 2rem;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        flex-wrap: wrap;
+    }
+
+        .page-header h1 {
+            margin: 0;
+            color: #0d505a;
+            font-weight: 700;
+        }
+
+    .header-actions {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    /* TABLE DESIGN (Luxprop unified style) */
+    .table {
+        width: 100%;
+        background: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+        .table th {
+            background-color: #0d505a;
+            color: white;
+            font-size: .85rem;
+            text-transform: uppercase;
+            padding: 1rem;
+        }
+
+        .table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e2e2;
+            vertical-align: middle;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f1f5f6;
+        }
+
+    .badge {
+        padding: .45rem .7rem;
+        border-radius: 6px;
+        font-size: .75rem;
+        font-weight: 600;
+    }
+
+    .loading,
+    .no-data {
+        padding: 2rem;
+        text-align: center;
+        font-size: 1.2rem;
+        color: #0d505a;
+    }
+
+</style>

@@ -1,0 +1,543 @@
+﻿@page "/dashboard"
+@using Luxprop.Business.Services.Dashboard
+@using Luxprop.Data
+@using Luxprop.Data.Models
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.EntityFrameworkCore
+@inject LuxpropContext Db
+@inject IJSRuntime JSRuntime
+@inject NavigationManager NavigationManager
+@inject Luxprop.Services.SessionService SessionService
+@implements IAsyncDisposable
+@inject IDashboardService DashboardService
+
+
+<PageTitle>Dashboard - Luxprop</PageTitle>
+
+
+@if (!_initialized)
+{
+    <div class="text-center p-5">
+        <div class="spinner-border text-primary"></div>
+        <p class="mt-3 text-muted">Loading dashboard...</p>
+    </div>
+    return;
+}
+
+<div class="dashboard-page">
+    <div class="page-header">
+        <h1>Dashboard</h1>
+    </div>
+
+    <div class="dashboard-grid">
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Documents Expiring Soon</h3>
+            </div>
+            <div class="card-content">
+                @if (docsToExpire.Any())
+                {
+                    <ul class="activity-list">
+                        @foreach (var d in docsToExpire.Take(5))
+                        {
+                            <li class="activity-item">
+                                <div class="activity-title">@d.Nombre</div>
+                                <div class="activity-meta">
+                                    Expires: @d.FechaVencimiento?.ToString("yyyy-MM-dd")
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <div class="no-activity">No documents expiring soon</div>
+                }
+            </div>
+        </div>
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Upcoming Reminders</h3>
+            </div>
+            <div class="card-content">
+                @if (upcomingReminders.Any())
+                {
+                    <ul class="activity-list">
+                        @foreach (var r in upcomingReminders.Take(5))
+                        {
+                            <li class="activity-item">
+                                <div class="activity-title">@r.Titulo</div>
+                                <div class="activity-meta">
+                                    @r.Inicio.ToString("yyyy-MM-dd HH:mm")
+
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <div class="no-activity">No reminders in the next days</div>
+                }
+            </div>
+        </div>
+
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Properties Overview</h3>
+            </div>
+            <div class="card-content">
+                <div class="stat-item">
+                    <span class="stat-number">@totalProperties</span>
+                    <span class="stat-label">Total Properties</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">@activeProperties</span>
+                    <span class="stat-label">Active Properties</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Quick Actions</h3>
+            </div>
+            <div class="card-content">
+                <div class="action-buttons">
+                    <a href="/properties/create" class="btn btn-primary">
+                        <i class="bi bi-plus-circle"></i>
+                        Add Property
+                    </a>
+                    <a href="/properties" class="btn btn-secondary">
+                        <i class="bi bi-list"></i>
+                        View Properties
+                    </a>
+                    <a href="/chat" class="btn btn-info">
+                        <i class="bi bi-chat"></i>
+                        Chat Support
+                    </a>
+                    <a href="/expedientes" class="btn btn-info">
+                        <i class="bi bi-folder"></i>
+                        View Case Files
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Recent Activity</h3>
+            </div>
+            <div class="card-content">
+                @if (recentProperties?.Any() == true)
+                {
+                    <div class="activity-list">
+                        @foreach (var property in recentProperties.Take(5))
+                        {
+                            <div class="activity-item">
+                                <div class="activity-title">@property.Titulo</div>
+                                <div class="activity-meta">@property.EstadoPublicacion</div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="no-activity">No recent activity</div>
+                }
+            </div>
+        </div>
+
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Navigation</h3>
+            </div>
+            <div class="card-content">
+                <nav class="dashboard-nav">
+                    <a href="/properties" class="nav-link">
+                        <i class="bi bi-building"></i>
+                        Properties
+                    </a>
+                    <a href="/User/Create" class="nav-link">
+                        <i class="bi bi-person-plus"></i>
+                        Create User
+                    </a>
+                    <a href="/chat" class="nav-link">
+                        <i class="bi bi-chat-dots"></i>
+                        Chat
+                    </a>
+                    <a href="/documents" class="nav-link">
+                        <i class="bi bi-file-text"></i>
+                        Documents
+                    </a>
+                    <a href="/map" class="nav-link">
+                        <i class="bi bi-geo-alt"></i>
+                        Map
+                    </a>
+                    <a href="/records" class="nav-link">
+                        <i class="bi bi-archive"></i>
+                        Records
+                    </a>
+                </nav>
+            </div>
+        </div>
+
+        <!-- Chat Notifications -->
+        <div class="dashboard-card">
+            <div class="card-header">
+                <h3>Chat Notifications</h3>
+            </div>
+            <div class="card-content">
+                @if (chatNotifications.Count == 0)
+                {
+                    <div class="no-activity">No notifications yet</div>
+                }
+                else
+                {
+                    <ul class="activity-list">
+                        @foreach (var n in chatNotifications)
+                        {
+                            <li class="activity-item">@n</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int totalProperties = 0;
+    private int activeProperties = 0;
+    private List<Propiedad>? recentProperties;
+
+    private HubConnection? hub;
+    private readonly List<string> chatNotifications = new();
+
+    private bool _initialized = false;
+    private bool _authorized = false;
+    private string _role = "";
+
+    private List<Documento> docsToExpire = new();
+    private List<Recordatorio> upcomingReminders = new();
+
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // 1) Obtener el rol (sessionStorage ya está disponible)
+        var roleRaw = await SessionService.GetUserRoleAsync();
+        _role = NormalizeRole(roleRaw);
+
+        _authorized = _role == "admin";
+
+        if (!_authorized)
+        {
+            NavigationManager.NavigateTo(_role switch
+            {
+                "agent" => "/dashboardagent",
+                "seller" => "/dashboardvend",
+                "buyer" => "/dashboardcomp",
+                _ => "/login"
+            }, true);
+            return;
+        }
+
+        // 2) Cargar los datos
+        await LoadDashboardData();
+
+        // 3) Inicializar chat
+        await InitializeChatHubAsync();
+
+        // 4) Usuario cargado
+        await LoadUserName();
+
+        // 5) Ahora sí mostrar todo
+        _initialized = true;
+
+        StateHasChanged();
+    }
+
+
+    private async Task LoadDashboardData()
+    {
+        try
+        {
+            await LoadProperties();
+            await LoadCases();
+
+            docsToExpire = await DashboardService.GetDocumentsToExpireAsync(7);
+            upcomingReminders = await DashboardService.GetUpcomingRemindersAsync(7);
+
+            var properties = await Db.Propiedads.ToListAsync();
+            totalProperties = properties.Count;
+            activeProperties = properties.Count(p => p.EstadoPublicacion == "Active");
+            recentProperties = properties.OrderByDescending(p => p.PropiedadId).Take(5).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Dashboard error: " + ex.Message);
+        }
+    }
+
+
+    private async Task LoadUserName()
+    {
+        try
+        {
+            var userName = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "UserName");
+        }
+        catch { }
+    }
+
+
+    private async Task InitializeChatHubAsync()
+    {
+        try
+        {
+            hub = new HubConnectionBuilder()
+                .WithUrl(NavigationManager.ToAbsoluteUri("/hubs/chat"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            hub.On<object>("NewThread", payload =>
+            {
+                string text;
+                try
+                {
+                    dynamic d = payload!;
+                    text = $"New chat from {d.clientName} (Thread #{d.threadId})";
+                }
+                catch
+                {
+                    text = $"New chat started: {payload}";
+                }
+
+                chatNotifications.Insert(0, text);
+                InvokeAsync(StateHasChanged);
+            });
+
+            await hub.StartAsync();
+        }
+        catch { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hub is not null)
+            await hub.DisposeAsync();
+    }
+
+    private static string NormalizeRole(string? name)
+    {
+        var n = name?.Trim().ToLowerInvariant();
+        return n switch
+        {
+            "administrador" or "admin" => "admin",
+            "agente" or "agent" => "agent",
+            "vendedor" or "seller" => "seller",
+            "comprador" or "buyer" or "cliente" => "buyer",
+            _ => string.Empty
+        };
+    }
+
+    private async Task LoadProperties()
+    {
+        var list = await Db.Propiedads.ToListAsync();
+        totalProperties = list.Count;
+        activeProperties = list.Count(p => p.EstadoPublicacion == "Active");
+        recentProperties = list.OrderByDescending(p => p.PropiedadId).Take(5).ToList();
+    }
+
+    private Task LoadCases() => Task.CompletedTask;
+}
+
+
+
+
+
+
+
+<style>
+    .dashboard-page {
+        padding: 2rem;
+        min-height: 100vh;
+        background-color: #f8f9fa;
+    }
+
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        padding-bottom: 1rem;
+        border-bottom: 2px solid #0d505a;
+    }
+
+        .page-header h1 {
+            margin: 0;
+            color: #0d505a;
+            font-size: 2.5rem;
+        }
+
+    .user-info {
+        color: #666;
+        font-size: 1.1rem;
+    }
+
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+    }
+
+    .dashboard-card {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+
+    .card-header {
+        background-color: #0d505a;
+        color: white;
+        padding: 1rem;
+    }
+
+        .card-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+        }
+
+    .card-content {
+        padding: 1.5rem;
+    }
+
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid #eee;
+    }
+
+        .stat-item:last-child {
+            border-bottom: none;
+        }
+
+    .stat-number {
+        font-size: 2rem;
+        font-weight: bold;
+        color: #0d505a;
+    }
+
+    .stat-label {
+        color: #666;
+        font-size: 0.9rem;
+    }
+
+    .action-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .btn {
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        text-decoration: none;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .btn-primary {
+        background-color: #0d505a;
+        color: white;
+        border-color: #0d505a;
+    }
+
+        .btn-primary:hover {
+            background-color: #093e47;
+            border-color: #093e47;
+        }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+        border-color: #6c757d;
+    }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+            border-color: #545b62;
+        }
+
+    .btn-info {
+        background-color: #17a2b8;
+        color: white;
+        border-color: #17a2b8;
+    }
+
+        .btn-info:hover {
+            background-color: #138496;
+            border-color: #138496;
+        }
+
+    .activity-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .activity-item {
+        padding: 0.75rem;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+        border-left: 3px solid #0d505a;
+    }
+
+    .activity-title {
+        font-weight: 500;
+        color: #333;
+    }
+
+    .activity-meta {
+        font-size: 0.8rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+
+    .no-activity {
+        text-align: center;
+        color: #666;
+        font-style: italic;
+    }
+
+    .dashboard-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .nav-link {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem;
+        color: #333;
+        text-decoration: none;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+        .nav-link:hover {
+            background-color: #f8f9fa;
+            color: #0d505a;
+        }
+</style>
