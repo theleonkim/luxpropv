@@ -28,3 +28,6 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Luxprop.Web.dll"]
+git add Dockerfile
+git commit -m "Add new working Dockerfile for Render"
+git push
